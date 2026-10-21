@@ -2,7 +2,7 @@
 // Pure: no database access, so it can be unit-tested with a tiny synthetic city.
 import { cellToLatLng, gridDisk } from "h3-js";
 import { haversineM, type LonLat } from "@/lib/geo/line";
-import type { PoiCategory } from "@/lib/osm/classify";
+import type { OsmType, PoiCategory } from "@/lib/osm/classify";
 import { applyTransitFloor, confidenceFor, toScore, weightedScore, type Components, type Confidence } from "./combine";
 import {
   TRANSIT_CATEGORIES,
@@ -26,9 +26,19 @@ export interface PoiInput {
   openingHours: string | null;
   is24x7: boolean;
   emergency: boolean;
+  osmType: OsmType;
   lon: number;
   lat: number;
   h3: string;
+}
+
+/**
+ * Default opening hours when a POI has no valid tag. Anchor hospitals default to the
+ * category default (24x7); other "hospitals" (mostly clinics) to nonAnchorHospitalHours.
+ */
+export function defaultHoursFor(p: PoiInput, cfg: ScoreConfig): string {
+  if (p.category === "hospital" && !isAnchorHospital(p)) return cfg.nonAnchorHospitalHours;
+  return cfg.openingHoursDefaults[p.category];
 }
 
 export interface ScoringInput {
@@ -51,7 +61,7 @@ export interface ScoringResult {
   stats: {
     hospitals: number;
     anchorHospitals: number;
-    /** Anchor hospitals that qualify via emergency=yes (the rest qualify by name). */
+    /** Anchor hospitals that qualify via emergency=yes (the rest by name + building outline). */
     anchorHospitalsEmergency: number;
     police: number;
     fuel24x7: number;
@@ -73,7 +83,6 @@ function nearestM(from: LonLat, targets: LonLat[]): number {
 }
 
 export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): ScoringResult {
-  const defaults = cfg.openingHoursDefaults;
 
   // Per-cell hourly sums of "open" POIs, split into transit and everything else.
   const openByCell = new Map<string, Float64Array>();
@@ -86,7 +95,7 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
   let emergencyCount = 0;
 
   for (const p of input.pois) {
-    const hours = poiOpenByHour(p, defaults);
+    const hours = poiOpenByHour(p, defaultHoursFor(p, cfg));
     const target = TRANSIT_CATEGORIES.has(p.category) ? transitByCell : openByCell;
     let arr = target.get(p.h3);
     if (!arr) target.set(p.h3, (arr = new Float64Array(24)));
@@ -152,7 +161,9 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
     arrs.forEach((a, i) => out.set(a, i * 24));
     return out;
   };
-  const normOpen = makeNormalizer(flat(rawOpen), clip);
+  // Open places: log(1 + count) so a few very busy cells don't flatten everyone else.
+  const logOpen = rawOpen.map((a) => a.map(Math.log1p));
+  const normOpen = makeNormalizer(flat(logOpen), cfg.openPlaces.percentileClip);
   const normTransit = makeNormalizer(flat(rawTransit), clip);
   const litValues = rawLighting.filter((v): v is number => v !== null);
   const normLighting = litValues.length > 0 ? makeNormalizer(litValues, clip) : null;
@@ -173,7 +184,7 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
     const wo = new Float64Array(24);
     for (const h of HOURS) {
       const c: Components = {
-        openPlaces: normOpen(rawOpen[i][h]),
+        openPlaces: normOpen(logOpen[i][h]),
         lighting,
         roadType,
         anchors,

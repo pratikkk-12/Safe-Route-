@@ -1,6 +1,6 @@
 import type { ComponentKey } from "./config";
 
-/** Normalized component values; lighting may be null (missing). */
+/** Normalized component values; lighting and reports may be null (missing). */
 export type Components = Record<ComponentKey, number | null>;
 
 /**

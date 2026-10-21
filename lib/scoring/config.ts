@@ -6,13 +6,18 @@ export type ComponentKey = (typeof COMPONENT_KEYS)[number];
 
 export interface ScoreConfig {
   weights: Record<ComponentKey, number>;
+  /** Clip percentiles for every component except open places. */
   percentileClip: [number, number];
+  /** Open places are normalized on log(1 + count) with their own clip. */
+  openPlaces: { percentileClip: [number, number] };
   lighting: { minTaggedShare: number };
   anchors: { fullCreditM: number; zeroCreditM: number };
   reports: { maxAgeDays: number; windowHours: number; halfLifeDays: number; saturation: number };
   confidence: { minPoisNearby: number };
   /** OSM opening_hours syntax, used only when a POI has no (valid) tag. */
   openingHoursDefaults: Record<PoiCategory, string>;
+  /** Default for hospitals that are not anchors (mostly clinics). Anchors use openingHoursDefaults.hospital. */
+  nonAnchorHospitalHours: string;
 }
 
 /** Throws if the config is incomplete or the weights don't sum to 1. */
@@ -24,8 +29,13 @@ export function validateConfig(cfg: ScoreConfig): ScoreConfig {
   }
   const sum = COMPONENT_KEYS.reduce((s, k) => s + cfg.weights[k], 0);
   if (Math.abs(sum - 1) > 1e-6) throw new Error(`score-weights.json: weights sum to ${sum}, expected 1`);
-  const [lo, hi] = cfg.percentileClip;
-  if (!(lo >= 0 && hi <= 100 && lo < hi)) throw new Error("score-weights.json: percentileClip must be [lo, hi] with lo < hi");
+  for (const [name, [lo, hi]] of [
+    ["percentileClip", cfg.percentileClip],
+    ["openPlaces.percentileClip", cfg.openPlaces?.percentileClip ?? [NaN, NaN]],
+  ] as const) {
+    if (!(lo >= 0 && hi <= 100 && lo < hi)) throw new Error(`score-weights.json: ${name} must be [lo, hi] with 0 <= lo < hi <= 100`);
+  }
+  if (!cfg.nonAnchorHospitalHours) throw new Error("score-weights.json: nonAnchorHospitalHours is required");
   return cfg;
 }
 

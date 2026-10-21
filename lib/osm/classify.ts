@@ -44,6 +44,12 @@ export function encodeOsmId(type: OsmType, id: number): number {
   return id * 10 + (type === "node" ? 0 : type === "way" ? 1 : 2);
 }
 
+/** Inverse of encodeOsmId's type digit. */
+export function decodeOsmType(encodedId: number): OsmType {
+  const t = encodedId % 10;
+  return t === 0 ? "node" : t === 1 ? "way" : "relation";
+}
+
 const AMENITY_CATEGORIES: Record<string, PoiCategory> = {
   fuel: "fuel",
   pharmacy: "pharmacy",

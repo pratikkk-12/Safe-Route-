@@ -88,32 +88,33 @@ Rough size: about 12,000 cells x 24 hours, around 300k cell_score rows. Fine for
 
 ## 5. Night Activity Score
 
-For each cell and each hour, compute these components. Normalize each to 0 to 1 using city-wide percentiles (clip at p5 and p95; hour-dependent components use percentiles over all cell-hours, so night stays lower than day). Weights and all tunable values live in config/score-weights.json so I can tune them without code changes.
+For each cell and each hour, compute these components. Normalize each to 0 to 1 using city-wide percentiles (clip at p5 and p95; open places use log(1 + count) clipped at p5 and p99; hour-dependent components use percentiles over all cell-hours, so night stays lower than day). Weights and all tunable values live in config/score-weights.json so I can tune them without code changes.
 
 | Component | Weight | How |
 | --- | --- | --- |
-| Open places at that hour | 0.30 | Count POIs open at that hour (non-transit categories) in the cell plus ring-1 neighbours. A place is "open at hour h" for the fraction of the 7 weekdays it is open at h:30. Real opening_hours tags always win; if the tag is missing or unparseable, use the per-category default from config (below) |
+| Open places at that hour | 0.30 | Count POIs open at that hour (non-transit categories) in the cell plus ring-1 neighbours. "Open at hour h" = the fraction of 28 checks (h:00, h:15, h:30, h:45 on each of the 7 weekdays) at which it is open. Real opening_hours tags always win; if the tag is missing or unparseable, use the default from config (below). Normalized on log(1 + count), clipped at p5 and p99 |
 | Lighting | 0.20 | Only cells with real lit data: at least 30% of the cell's road length has a lit tag (config: lighting.minTaggedShare). Value = share of the tagged length with lit=yes. Otherwise lighting is **missing**: it is NOT estimated from road class (that would double-count road type), and its weight is redistributed proportionally across the other components |
 | Road type | 0.15 | Length share of trunk/primary/secondary/tertiary vs residential/service/unclassified/track/path/footway |
-| Safety anchors nearby | 0.15 | Distance from the cell centre to the nearest police station, anchor hospital and 24x7 fuel station; each gives full credit within 300 m, zero beyond 1.5 km (linear between), averaged. A hospital is an anchor only if emergency=yes OR its name contains "hospital" (case-insensitive); other "hospitals" (mostly clinics) count only as open places. A fuel station is 24x7 if its tag says so, or it has no tag (category default) |
+| Safety anchors nearby | 0.15 | Distance from the cell centre to the nearest police station, anchor hospital and 24x7 fuel station; each gives full credit within 300 m, zero beyond 1.5 km (linear between), averaged. A hospital is an anchor only if emergency=yes, OR its name contains "hospital" (case-insensitive) AND it is mapped as a way/relation (building outline). Name-only nodes are not anchors. Non-anchor "hospitals" (mostly clinics) count only as open places. A fuel station is 24x7 if its tag says so, or it has no tag (category default) |
 | Transit presence | 0.10 | Bus stops, bus stations, metro and railway stations open at that hour (per-category defaults) in the cell plus ring-1 neighbours. OSM bus stop coverage is incomplete, so transit is a **bonus**: zero transit gives 0 for the component, but it alone must not push a cell below the city median for that hour (see below) |
-| Community reports | 0.10 | Approved reports from the last 90 days within plus or minus 2 hours of this hour (wrapping midnight), time-decayed (half-life 30 days). Value = 0.5 + 0.5 x tanh(sum of sentiment x decay / saturation): 0.5 with no reports, so reports can push the score up or down by up to 5 points |
+| Community reports | 0.10 | Approved reports from the last 90 days within plus or minus 2 hours of this hour (wrapping midnight), time-decayed (half-life 30 days). If none qualify for that cell and hour, reports are **missing** and their weight is redistributed (same as lighting; no neutral value). Otherwise value = 0.5 + 0.5 x tanh(sum of sentiment x decay / saturation) |
 
-Per-category opening-hours defaults (used only when opening_hours is missing or unparseable; real tags always override):
+Opening-hours defaults (used only when opening_hours is missing or unparseable; real tags always override):
 
 | Category | Default |
 | --- | --- |
-| restaurant, fast_food, cafe | 11:00-23:00 |
+| restaurant, fast_food, cafe | 11:00-23:30 |
 | convenience | 07:00-22:00 |
 | pharmacy | 08:00-22:00 |
-| atm, hotel, fuel, hospital, police, railway_station | 24x7 |
+| atm, hotel, fuel, police, railway_station, anchor hospitals | 24x7 |
+| non-anchor hospitals (mostly clinics) | 09:00-21:00 |
 | metro_station | 06:00-22:00 |
 | bus_station | 05:00-23:00 |
 | bus_stop | 05:30-23:00 |
 
 Combining:
 
-- with = weighted sum of available components (if lighting is missing, the remaining weights are scaled up so they still sum to 1).
+- with = weighted sum of available components (if lighting and/or reports are missing, the remaining weights are scaled up proportionally so they still sum to 1).
 - without_transit = the same, with transit removed and the rest re-weighted to sum to 1.
 - median_h = city median of `with` at that hour.
 - Final = max(with, min(without_transit, median_h)) x 100, rounded. Transit can raise a score; lacking transit can lower an above-median cell at most to the median, and never lowers a below-median cell.

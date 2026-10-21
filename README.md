@@ -56,7 +56,9 @@ npm run compute-scores -- --dry-run   # compute and print stats only
 ```
 
 It prints the score distribution per hour, cells by confidence, anchor hospital counts, and
-the top/bottom cells at 23:00 with their components. The home map shows the heat layer with
+the top 10 / bottom 5 built-up cells at 21:00 and 23:00 with their components.
+The API caches each hour's scores for up to an hour, so restart `npm run dev` after a
+recompute to see the new scores straight away. The home map shows the heat layer with
 an hour slider; tap a hexagon for its breakdown.
 
 API: `GET /api/cells?hour=22&bbox=w,s,e,n` -> `[{ h3, score, confidence }]`,

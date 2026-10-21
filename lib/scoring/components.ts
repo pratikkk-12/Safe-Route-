@@ -41,9 +41,16 @@ export function anchorsValue(
   return (anchorCredit(nearest.policeM, cfg) + anchorCredit(nearest.hospitalM, cfg) + anchorCredit(nearest.fuelM, cfg)) / 3;
 }
 
-/** A hospital is a safety anchor only with emergency=yes or "hospital" in its name. */
-export function isAnchorHospital(poi: { emergency: boolean; name: string | null }): boolean {
-  return poi.emergency || /hospital/i.test(poi.name ?? "");
+/**
+ * A hospital is a safety anchor with emergency=yes, or with "hospital" in its name AND
+ * mapped as a building outline (way/relation). Name-only nodes are mostly clinics.
+ */
+export function isAnchorHospital(poi: {
+  emergency: boolean;
+  name: string | null;
+  osmType: "node" | "way" | "relation";
+}): boolean {
+  return poi.emergency || (/hospital/i.test(poi.name ?? "") && poi.osmType !== "node");
 }
 
 /** Distance between two hours on a 24 h clock (23 and 1 are 2 apart). */
@@ -59,15 +66,18 @@ export interface ReportInput {
 }
 
 /**
- * 0.5 with no reports; moves toward 0 (negative) or 1 (positive). Only reports within
- * maxAgeDays and +/- windowHours of `hour` count, decayed with the given half-life.
+ * null (missing) when no approved report falls within maxAgeDays and +/- windowHours of
+ * `hour`. Otherwise 0.5 + 0.5 x tanh(decayed sentiment sum / saturation): below 0.5 for
+ * mostly negative reports, above for mostly positive.
  */
-export function reportsValue(reports: ReportInput[], hour: number, cfg: ScoreConfig["reports"]): number {
+export function reportsValue(reports: ReportInput[], hour: number, cfg: ScoreConfig["reports"]): number | null {
   let sum = 0;
+  let counted = 0;
   for (const r of reports) {
     if (r.ageDays < 0 || r.ageDays > cfg.maxAgeDays) continue;
     if (hourDistance(r.hour, hour) > cfg.windowHours) continue;
     sum += r.sentiment * 0.5 ** (r.ageDays / cfg.halfLifeDays);
+    counted++;
   }
-  return 0.5 + 0.5 * Math.tanh(sum / cfg.saturation);
+  return counted === 0 ? null : 0.5 + 0.5 * Math.tanh(sum / cfg.saturation);
 }

@@ -48,10 +48,8 @@ function detailHtml(d: CellDetail): string {
     const { label, hint } = COMPONENT_LABELS[k];
     const value =
       v === null
-        ? `<span class="text-zinc-500">no data</span>`
-        : k === "reports" && v === 0.5
-          ? `<span class="text-zinc-500">none yet</span>`
-          : `<span class="inline-block h-1.5 w-16 rounded bg-zinc-200 align-middle"><span class="block h-1.5 rounded bg-zinc-700" style="width:${Math.round(v * 100)}%"></span></span>`;
+        ? `<span class="text-zinc-500">${k === "reports" ? "none yet" : "no data"}</span>`
+        : `<span class="inline-block h-1.5 w-16 rounded bg-zinc-200 align-middle"><span class="block h-1.5 rounded bg-zinc-700" style="width:${Math.round(v * 100)}%"></span></span>`;
     return `<li class="flex items-center justify-between gap-3" title="${escapeHtml(hint)}"><span>${label}</span>${value}</li>`;
   }).join("");
   return `<div class="text-sm text-zinc-900 min-w-52">

@@ -1,7 +1,7 @@
 import { gridDisk, latLngToCell } from "h3-js";
 import { describe, expect, it } from "vitest";
 import type { RoadTotals } from "./components";
-import { computeCellScores, type PoiInput, type ScoringInput } from "./compute";
+import { computeCellScores, defaultHoursFor, type PoiInput, type ScoringInput } from "./compute";
 import { scoreConfig } from "./config";
 
 // A tiny synthetic city: a busy centre cell, a quiet residential cell 3 km away, and
@@ -18,6 +18,7 @@ const poi = (overrides: Partial<PoiInput>): PoiInput => ({
   openingHours: null,
   is24x7: false,
   emergency: false,
+  osmType: "node",
   lon: 73.85,
   lat: 18.52,
   h3: CENTRE,
@@ -80,24 +81,45 @@ describe("computeCellScores", () => {
     expect(quiet.confidence).toBe("low");
   });
 
-  it("only counts named or emergency hospitals as anchors", () => {
+  it("counts as anchors only emergency=yes, or 'hospital' in the name on a way/relation", () => {
     const r = computeCellScores(
       city([
-        poi({ category: "hospital", name: "Sahyadri Hospital" }),
-        poi({ category: "hospital", name: "Dr. Joshi Clinic" }),
+        poi({ category: "hospital", name: "Sahyadri Hospital", osmType: "way" }),
+        poi({ category: "hospital", name: "Sai Hospital", osmType: "node" }),
+        poi({ category: "hospital", name: "Dr. Joshi Clinic", osmType: "way" }),
         poi({ category: "hospital", name: "Polyclinic", emergency: true }),
       ]),
       scoreConfig,
     );
-    expect(r.stats.hospitals).toBe(3);
+    expect(r.stats.hospitals).toBe(4);
     expect(r.stats.anchorHospitals).toBe(2);
+    expect(r.stats.anchorHospitalsEmergency).toBe(1);
   });
 
-  it("counts a non-anchor hospital as an open place", () => {
-    const clinic = poi({ category: "hospital", name: "Dr. Joshi Clinic", h3: QUIET, lat: 18.545 });
-    const r = computeCellScores(city([clinic]), scoreConfig);
+  it("gives non-anchor hospitals clinic hours (09:00-21:00) and anchors 24x7", () => {
+    const clinic = poi({ category: "hospital", name: "Sai Hospital", osmType: "node" });
+    const anchor = poi({ category: "hospital", name: "Sahyadri Hospital", osmType: "way" });
+    expect(defaultHoursFor(clinic, scoreConfig)).toBe("09:00-21:00");
+    expect(defaultHoursFor(anchor, scoreConfig)).toBe("24/7");
+    // The clinic is an open place by day, not at night.
+    const r = computeCellScores(city([{ ...clinic, h3: QUIET, lat: 18.545 }]), scoreConfig);
     const q = r.cells.find((c) => c.h3 === QUIET)!;
-    expect(q.components[3].openPlaces).toBeGreaterThan(0);
+    expect(q.components[12].openPlaces).toBeGreaterThan(0);
+    expect(q.components[23].openPlaces).toBe(0);
+  });
+
+  it("treats reports as missing when a cell has none", () => {
+    expect(centre.components[22].reports).toBeNull();
+  });
+
+  it("uses reports only near the reported hour", () => {
+    const r = computeCellScores(
+      { ...city(), reports: new Map([[CENTRE, [{ hour: 22, sentiment: -1, ageDays: 3 }]]]) },
+      scoreConfig,
+    );
+    const c = r.cells.find((x) => x.h3 === CENTRE)!;
+    expect(c.components[22].reports).toBeLessThan(0.5);
+    expect(c.components[12].reports).toBeNull();
   });
 
   it("treats fuel as a 24x7 anchor only when its hours allow", () => {

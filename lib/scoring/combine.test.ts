@@ -19,6 +19,13 @@ describe("weightedScore", () => {
     expect(weightedScore({ ...all(0.6), lighting: null }, w)).toBeCloseTo(0.6);
   });
 
+  it("redistributes lighting and reports together when both are missing", () => {
+    const c: Components = { openPlaces: 1, lighting: null, roadType: 0, anchors: 0, transit: 0, reports: null };
+    // 0.30 / (1 - 0.20 - 0.10) = 0.4286
+    expect(weightedScore(c, w)).toBeCloseTo(0.3 / 0.7);
+    expect(weightedScore({ ...all(0.42), lighting: null, reports: null }, w)).toBeCloseTo(0.42);
+  });
+
   it("does not treat missing lighting as dark", () => {
     const missing = weightedScore({ ...all(0.8), lighting: null }, w);
     const dark = weightedScore({ ...all(0.8), lighting: 0 }, w);

@@ -6,7 +6,7 @@
 import "./load-env";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { cellToLatLng, gridDisk } from "h3-js";
-import type { PoiCategory } from "@/lib/osm/classify";
+import { decodeOsmType, type PoiCategory } from "@/lib/osm/classify";
 import type { CellResult, PoiInput } from "@/lib/scoring/compute";
 import { HOURS, computeCellScores } from "@/lib/scoring/compute";
 import type { ReportInput, RoadTotals } from "@/lib/scoring/components";
@@ -15,7 +15,7 @@ import { percentile } from "@/lib/scoring/normalize";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const BATCH = 5000;
-const SAMPLE_HOUR = 23;
+const SAMPLE_HOURS = [21, 23];
 
 async function main() {
   const url = process.env.DATABASE_URL;
@@ -25,8 +25,9 @@ async function main() {
 
   console.log("Loading POIs, road totals and approved reports...");
   const poiRows = (await sql.query(
-    `SELECT category, name, opening_hours, is_24x7, emergency, ST_X(geom) AS lon, ST_Y(geom) AS lat, h3_r9 FROM poi`,
+    `SELECT osm_id, category, name, opening_hours, is_24x7, emergency, ST_X(geom) AS lon, ST_Y(geom) AS lat, h3_r9 FROM poi`,
   )) as {
+    osm_id: string;
     category: PoiCategory;
     name: string | null;
     opening_hours: string | null;
@@ -42,6 +43,7 @@ async function main() {
     openingHours: r.opening_hours,
     is24x7: r.is_24x7,
     emergency: r.emergency,
+    osmType: decodeOsmType(Number(r.osm_id)),
     lon: Number(r.lon),
     lat: Number(r.lat),
     h3: r.h3_r9,
@@ -97,7 +99,7 @@ function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellSco
   console.log("\nAnchors");
   console.log(`  hospitals qualifying as anchors: ${stats.anchorHospitals} of ${stats.hospitals}`);
   console.log(
-    `    via emergency=yes: ${stats.anchorHospitalsEmergency}, via "hospital" in name only: ${stats.anchorHospitals - stats.anchorHospitalsEmergency}`,
+    `    via emergency=yes: ${stats.anchorHospitalsEmergency}, via "hospital" in name + way/relation: ${stats.anchorHospitals - stats.anchorHospitalsEmergency}`,
   );
   console.log(`  police stations: ${stats.police}, 24x7 fuel stations: ${stats.fuel24x7}`);
   console.log(`  cells with real lit data: ${stats.cellsWithRealLit} of ${cells.length}`);
@@ -108,9 +110,9 @@ function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellSco
       const sorted = Float64Array.from(cells, (c) => c.scores[h]).sort();
       return {
         hour: `${String(h).padStart(2, "0")}:00`,
-        p10: percentile(sorted, 10),
-        p50: percentile(sorted, 50),
-        p90: percentile(sorted, 90),
+        p10: Math.round(percentile(sorted, 10)),
+        p50: Math.round(percentile(sorted, 50)),
+        p90: Math.round(percentile(sorted, 90)),
       };
     }),
   );
@@ -138,34 +140,28 @@ function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellSco
     const names = [...new Set(nearby.filter((p) => p.name).map((p) => p.name!))].slice(0, 3);
     return names.join("; ") || "(no named POIs nearby)";
   };
-  const row = (c: CellResult) => {
-    const [lat, lng] = cellToLatLng(c.h3);
-    const comp = c.components[SAMPLE_HOUR];
-    const out: Record<string, string | number> = {
-      score: c.scores[SAMPLE_HOUR],
-      conf: c.confidence,
-      "lat,lon": `${lat.toFixed(4)},${lng.toFixed(4)}`,
+  const builtUp = (c: CellResult) =>
+    gridDisk(c.h3, 1).reduce((s, id) => s + (poisByCell.get(id)?.length ?? 0), 0) >= 5;
+
+  for (const hour of SAMPLE_HOURS) {
+    const row = (c: CellResult) => {
+      const [lat, lng] = cellToLatLng(c.h3);
+      const comp = c.components[hour];
+      const out: Record<string, string | number> = {
+        score: c.scores[hour],
+        conf: c.confidence,
+        "lat,lon": `${lat.toFixed(4)},${lng.toFixed(4)}`,
+      };
+      for (const k of COMPONENT_KEYS) out[k] = comp[k] === null ? "-" : Number(comp[k]!.toFixed(2));
+      out.near = placeHint(c.h3);
+      return out;
     };
-    for (const k of COMPONENT_KEYS) out[k] = comp[k] === null ? "missing" : Number(comp[k]!.toFixed(2));
-    out.near = placeHint(c.h3);
-    return out;
-  };
-
-  const byScore = [...cells].sort((a, b) => b.scores[SAMPLE_HOUR] - a.scores[SAMPLE_HOUR]);
-  console.log(`\nTop 5 cells at ${SAMPLE_HOUR}:00`);
-  console.table(byScore.slice(0, 5).map(row));
-
-  console.log(`Bottom 5 cells at ${SAMPLE_HOUR}:00`);
-  console.table(byScore.slice(-5).reverse().map(row));
-
-  console.log(`Bottom 5 at ${SAMPLE_HOUR}:00 among built-up cells (5+ POIs nearby), for a more useful check`);
-  console.table(
-    byScore
-      .filter((c) => gridDisk(c.h3, 1).reduce((s, id) => s + (poisByCell.get(id)?.length ?? 0), 0) >= 5)
-      .slice(-5)
-      .reverse()
-      .map(row),
-  );
+    const byScore = [...cells].sort((a, b) => b.scores[hour] - a.scores[hour]);
+    console.log(`\nTop 10 cells at ${hour}:00  ("-" = missing component, weight redistributed)`);
+    console.table(byScore.slice(0, 10).map(row));
+    console.log(`Bottom 5 built-up cells (5+ POIs in cell + ring-1) at ${hour}:00`);
+    console.table(byScore.filter(builtUp).slice(-5).reverse().map(row));
+  }
 }
 
 async function writeScores(sql: NeonQueryFunction<false, false>, cells: CellResult[]) {

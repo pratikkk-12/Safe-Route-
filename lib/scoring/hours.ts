@@ -12,8 +12,11 @@ const REF_MONDAY = 5;
 
 const cache = new Map<string, HourArray | null>();
 
+const QUARTERS = [0, 15, 30, 45];
+
 /**
- * For each hour h, the fraction of the 7 weekdays the schedule is open at h:30.
+ * For each hour h, the fraction of time the schedule is open during that hour:
+ * checked at h:00, h:15, h:30 and h:45 on each of the 7 weekdays (28 checks).
  * Returns null if the value can't be parsed.
  */
 export function openFractionByHour(spec: string): HourArray | null {
@@ -28,9 +31,11 @@ export function openFractionByHour(spec: string): HourArray | null {
       result = Array.from({ length: 24 }, (_, h) => {
         let open = 0;
         for (let d = 0; d < 7; d++) {
-          if (oh.getState(new Date(REF_YEAR, REF_MONTH, REF_MONDAY + d, h, 30))) open++;
+          for (const m of QUARTERS) {
+            if (oh.getState(new Date(REF_YEAR, REF_MONTH, REF_MONDAY + d, h, m))) open++;
+          }
         }
-        return open / 7;
+        return open / (7 * QUARTERS.length);
       });
     } catch {
       result = null;
@@ -46,13 +51,15 @@ export interface PoiHoursInput {
   is24x7: boolean;
 }
 
-/** Open fraction per hour. A real tag always wins; otherwise the category default. */
-export function poiOpenByHour(poi: PoiHoursInput, defaults: Record<PoiCategory, string>): HourArray {
+/**
+ * Open fraction per hour. A real tag always wins; otherwise `fallbackSpec`
+ * (the category default, see defaultHoursFor in compute.ts).
+ */
+export function poiOpenByHour(poi: PoiHoursInput, fallbackSpec: string | undefined): HourArray {
   if (poi.is24x7) return Array(24).fill(1);
   if (poi.openingHours) {
     const fromTag = openFractionByHour(poi.openingHours);
     if (fromTag) return fromTag;
   }
-  const fallback = defaults[poi.category];
-  return (fallback && openFractionByHour(fallback)) || Array(24).fill(0);
+  return (fallbackSpec && openFractionByHour(fallbackSpec)) || Array(24).fill(0);
 }

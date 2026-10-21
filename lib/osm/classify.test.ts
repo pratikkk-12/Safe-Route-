@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { encodeOsmId, highwayClass, isOpen24x7, normalizeLit, poiCategory } from "./classify";
+import { decodeOsmType, encodeOsmId, highwayClass, isOpen24x7, normalizeLit, poiCategory } from "./classify";
 
 describe("encodeOsmId", () => {
   it("keeps node, way and relation ids distinct", () => {
     const ids = [encodeOsmId("node", 123), encodeOsmId("way", 123), encodeOsmId("relation", 123)];
     expect(new Set(ids).size).toBe(3);
     expect(ids).toEqual([1230, 1231, 1232]);
+  });
+  it("round-trips the type", () => {
+    expect(decodeOsmType(encodeOsmId("node", 987))).toBe("node");
+    expect(decodeOsmType(encodeOsmId("way", 987))).toBe("way");
+    expect(decodeOsmType(encodeOsmId("relation", 987))).toBe("relation");
   });
   it("stays a safe integer for current OSM ids", () => {
     expect(Number.isSafeInteger(encodeOsmId("node", 13_000_000_000))).toBe(true);
