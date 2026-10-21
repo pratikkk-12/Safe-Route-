@@ -1,0 +1,8 @@
+{
+  "openPlaces": 0.3,
+  "lighting": 0.2,
+  "roadType": 0.15,
+  "anchors": 0.15,
+  "transit": 0.1,
+  "reports": 0.1
+}
