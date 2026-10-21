@@ -130,13 +130,26 @@ The provider is selected by env var `ROUTING_PROVIDER` (`osrm` | `ors`), default
 - Params: `alternatives=3&overview=full&geometries=geojson`
 - Verify the exact URL format with one test call before building on it.
   (Checked 2026-10-21: both endpoints return `code: "Ok"` with GeoJSON LineStrings. `alternatives=3` is a maximum, not a guarantee: FC Road to Hinjewadi returned 2 routes. Handle 1 to 3 routes.)
-- Max 1 request per second (queue on the server), descriptive User-Agent, cache identical requests for 10 minutes, keep OSM attribution visible.
+- Max 1 request per second (queue on the server), cache identical requests for 10 minutes, keep OSM attribution visible.
+- User-Agent: `SafeRoute-Pune/0.1 (+<GitHub repo URL>)`. Never put an email address in the User-Agent or any request.
 
 **2. ors: OpenRouteService Directions v2, used only when ORS_API_KEY is set**
 
 - profile: foot-walking (Walk), driving-car (Two-wheeler / Auto / Car)
 - alternative_routes: { target_count: 3, weight_factor: 1.6, share_factor: 0.6 }
-- If `ROUTING_PROVIDER=ors` but ORS_API_KEY is missing, fall back to osrm and log a warning.
+- If `ROUTING_PROVIDER=ors` but ORS_API_KEY is missing, fall back to osrm and log a warning once at startup (not on every request).
+
+### Extra candidates via a via point (osrm)
+
+OSRM alternatives are chosen for speed, not safety, so the safest real option may not be among the 1 to 3 routes returned. If fewer than 3 come back, generate up to 2 extra candidates using a via point:
+
+- Pick the highest-scoring cells (at the departure hour) within 1 km of the straight-line midpoint, at least 300 m apart from each other.
+- Request `from;via;to` in a single OSRM call with `alternatives=false`.
+- Drop any candidate more than 50% longer than the fastest route.
+- Dedupe candidates that share more than 80% of their length with another route.
+- Score every candidate the same way as normal routes.
+
+All calls, including via-point calls, go through the same 1 request/second queue.
 
 ### Scoring each route
 
@@ -182,7 +195,7 @@ Stop after each phase, give me PowerShell steps to test locally, and wait for my
 
 **Phase 3: Scoring.** scripts/compute-scores.ts writes cell_score for all 24 hours. GET /api/cells?hour=22&bbox=w,s,e,n returns [{ h3, score, confidence }]. Done when: the heat layer renders and visibly changes as I move the hour slider. Unit tests for every scoring component pass.
 
-**Phase 4: Routing.** Routing provider interface in lib/routing/ with osrm and ors providers (section 6). POST /api/route with { from, to, mode, departAt } returns scored alternatives. Done when these return 2 to 3 scored routes with a weakest stretch:
+**Phase 4: Routing.** Routing provider interface in lib/routing/ with osrm and ors providers, plus via-point extra candidates when fewer than 3 routes come back (section 6). POST /api/route with { from, to, mode, departAt } returns scored alternatives. Done when these return 2 to 3 scored routes with a weakest stretch:
 
 - FC Road to Hinjewadi Phase 1, 23:00, Two-wheeler
 - Pune Railway Station to Koregaon Park, 22:30, Walk
