@@ -1,10 +1,13 @@
 "use client";
 
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { MAP_STYLE_URL, PUNE_BBOX, PUNE_CENTER } from "@/lib/config";
+import { currentPuneHour } from "@/lib/score-display";
 import DebugPoiLayer from "./DebugPoiLayer";
+import HourPanel from "./HourPanel";
+import ScoreLayer, { type ScoreStatus } from "./ScoreLayer";
 
 // The debug toggle shows in development, or in any build with ?debug in the URL.
 const showDebug = () =>
@@ -15,6 +18,9 @@ export default function MapView() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const [loadedMap, setLoadedMap] = useState<MapLibreMap | null>(null);
   const [debug, setDebug] = useState(false);
+  const [hour, setHour] = useState<number | null>(null);
+  const [status, setStatus] = useState<ScoreStatus>("loading");
+  const onStatus = useCallback((s: ScoreStatus) => setStatus(s), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +59,7 @@ export default function MapView() {
       map.on("load", () => {
         setLoadedMap(map);
         setDebug(showDebug());
+        setHour(currentPuneHour());
       });
       mapRef.current = map;
     });
@@ -70,6 +77,12 @@ export default function MapView() {
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" aria-label="Map of Pune" role="region" />
+      {loadedMap && hour !== null && (
+        <>
+          <ScoreLayer map={loadedMap} hour={hour} onStatus={onStatus} />
+          <HourPanel hour={hour} onHour={setHour} status={status} />
+        </>
+      )}
       {loadedMap && debug && <DebugPoiLayer map={loadedMap} />}
     </div>
   );

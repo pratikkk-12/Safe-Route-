@@ -44,6 +44,24 @@ npm run ingest-osm -- --tiles=6      # smaller tiles if Overpass times out
 The script prints POI counts per category and road km per class. In `npm run dev` the map
 shows a **Debug: POIs** toggle (top left); in a production build add `?debug` to the URL.
 
+### Night Activity Scores (Phase 3)
+
+Computes a 0-100 score for every H3 cell and hour from the OSM data, and writes `cell_score`
+(~285k rows). Tunable weights, opening-hours defaults and thresholds are in
+`config/score-weights.json`; the method is in `SAFEROUTE-BUILD-PROMPT.md` section 5.
+
+```powershell
+npm run compute-scores                # compute, print stats, write to the DB (~30 s)
+npm run compute-scores -- --dry-run   # compute and print stats only
+```
+
+It prints the score distribution per hour, cells by confidence, anchor hospital counts, and
+the top/bottom cells at 23:00 with their components. The home map shows the heat layer with
+an hour slider; tap a hexagon for its breakdown.
+
+API: `GET /api/cells?hour=22&bbox=w,s,e,n` -> `[{ h3, score, confidence }]`,
+`GET /api/cells/{h3}?hour=22` -> score, confidence and components.
+
 ### Run
 
 ```powershell
@@ -64,10 +82,12 @@ npm run lint
 | `lib/osm/` | Overpass client and OSM tag classification |
 | `lib/config.ts` | Pune centre, bounding box, H3 resolution |
 | `lib/db/schema.ts` | Drizzle schema (poi, road_segment, cell_score, report) |
-| `lib/scoring/` | Pure scoring functions (Phase 3) |
+| `lib/scoring/` | Pure scoring functions + tests |
+| `lib/scores.ts` | Cached cell_score reads for the API |
+| `components/ScoreLayer.tsx`, `HourPanel.tsx` | Heat layer and hour slider |
 | `config/score-weights.json` | Score component weights |
 | `drizzle/` | SQL migrations (`0000` enables PostGIS) |
-| `scripts/` | One-off scripts (migrate, db-check, ingest-osm, later: scoring) |
+| `scripts/` | migrate, db-check, ingest-osm, compute-scores |
 
 ## Data and attribution
 

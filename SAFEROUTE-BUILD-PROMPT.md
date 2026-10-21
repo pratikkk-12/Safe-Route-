@@ -88,26 +88,45 @@ Rough size: about 12,000 cells x 24 hours, around 300k cell_score rows. Fine for
 
 ## 5. Night Activity Score
 
-For each cell and each hour, compute these components. Normalize each to 0 to 1 using city-wide percentiles (clip at p5 and p95). Weights live in config/score-weights.json so I can tune them without code changes.
+For each cell and each hour, compute these components. Normalize each to 0 to 1 using city-wide percentiles (clip at p5 and p95; hour-dependent components use percentiles over all cell-hours, so night stays lower than day). Weights and all tunable values live in config/score-weights.json so I can tune them without code changes.
 
 | Component | Weight | How |
 | --- | --- | --- |
-| Open places at that hour | 0.30 | Count POIs open at that hour (evaluate opening_hours; is_24x7 always counts) in the cell plus ring-1 neighbours. Missing opening_hours: assume daytime only (08:00 to 21:00) except fuel, hospital, police which count as 24x7 |
-| Lighting | 0.20 | Share of road length with lit=yes. If the cell has no lit data, estimate from road class (main roads better) and lower the confidence |
-| Road type | 0.15 | Length share of trunk/primary/secondary/tertiary vs residential/service/track/path |
-| Safety anchors nearby | 0.15 | Distance to nearest police station, hospital and 24x7 fuel station. Full credit within 300 m, zero beyond 1.5 km |
-| Transit presence | 0.10 | Bus stops, metro and railway stations in the cell plus ring-1 neighbours |
-| Community reports | 0.10 | Approved reports from the last 90 days within plus or minus 2 hours of this hour, time-decayed (half-life 30 days). Can push the score up or down |
+| Open places at that hour | 0.30 | Count POIs open at that hour (non-transit categories) in the cell plus ring-1 neighbours. A place is "open at hour h" for the fraction of the 7 weekdays it is open at h:30. Real opening_hours tags always win; if the tag is missing or unparseable, use the per-category default from config (below) |
+| Lighting | 0.20 | Only cells with real lit data: at least 30% of the cell's road length has a lit tag (config: lighting.minTaggedShare). Value = share of the tagged length with lit=yes. Otherwise lighting is **missing**: it is NOT estimated from road class (that would double-count road type), and its weight is redistributed proportionally across the other components |
+| Road type | 0.15 | Length share of trunk/primary/secondary/tertiary vs residential/service/unclassified/track/path/footway |
+| Safety anchors nearby | 0.15 | Distance from the cell centre to the nearest police station, anchor hospital and 24x7 fuel station; each gives full credit within 300 m, zero beyond 1.5 km (linear between), averaged. A hospital is an anchor only if emergency=yes OR its name contains "hospital" (case-insensitive); other "hospitals" (mostly clinics) count only as open places. A fuel station is 24x7 if its tag says so, or it has no tag (category default) |
+| Transit presence | 0.10 | Bus stops, bus stations, metro and railway stations open at that hour (per-category defaults) in the cell plus ring-1 neighbours. OSM bus stop coverage is incomplete, so transit is a **bonus**: zero transit gives 0 for the component, but it alone must not push a cell below the city median for that hour (see below) |
+| Community reports | 0.10 | Approved reports from the last 90 days within plus or minus 2 hours of this hour (wrapping midnight), time-decayed (half-life 30 days). Value = 0.5 + 0.5 x tanh(sum of sentiment x decay / saturation): 0.5 with no reports, so reports can push the score up or down by up to 5 points |
 
-Final score = weighted sum x 100, rounded.
+Per-category opening-hours defaults (used only when opening_hours is missing or unparseable; real tags always override):
+
+| Category | Default |
+| --- | --- |
+| restaurant, fast_food, cafe | 11:00-23:00 |
+| convenience | 07:00-22:00 |
+| pharmacy | 08:00-22:00 |
+| atm, hotel, fuel, hospital, police, railway_station | 24x7 |
+| metro_station | 06:00-22:00 |
+| bus_station | 05:00-23:00 |
+| bus_stop | 05:30-23:00 |
+
+Combining:
+
+- with = weighted sum of available components (if lighting is missing, the remaining weights are scaled up so they still sum to 1).
+- without_transit = the same, with transit removed and the rest re-weighted to sum to 1.
+- median_h = city median of `with` at that hour.
+- Final = max(with, min(without_transit, median_h)) x 100, rounded. Transit can raise a score; lacking transit can lower an above-median cell at most to the median, and never lowers a below-median cell.
 
 Confidence:
 
-- high: real lit data present and 5+ POIs nearby
+- high: real lit data present and 5+ POIs nearby (cell plus ring-1, any category)
 - medium: one of those
 - low: neither
 
-All scoring logic goes in lib/scoring/ as pure functions with Vitest unit tests.
+Since real lit data is rare in Pune OSM, most cells will be medium or low. That is expected and must be shown, not hidden.
+
+All scoring logic goes in lib/scoring/ as pure functions with Vitest unit tests. scripts/compute-scores.ts prints the score distribution per hour (p10, p50, p90), share of cells by confidence, the number of hospitals that qualify as anchors, and the 5 highest- and lowest-scoring cells at 23:00 with their components.
 
 ## 6. Route scoring
 
@@ -158,7 +177,7 @@ For each route:
 - Sample the geometry every 25 m and map each point to its H3 cell.
 - Look up cell_score for the departure hour (use the hour each sample is reached, based on cumulative duration).
 - Route score = 0.7 x length-weighted mean + 0.3 x the lowest 200 m rolling average. This penalizes a route with one very dark stretch.
-- Return: distance, duration, score, confidence, label, weakest stretch (geometry + top 2 reasons from components), per-segment colours.
+- Return: distance, duration, score, confidence, label, weakest stretch (geometry + top 2 reasons from components), per-segment colours. Route confidence = the length-weighted mix of cell confidences along the route, shown on every route card.
 
 Labels: Safest, Fastest, Balanced (if a third route exists).
 
@@ -170,7 +189,7 @@ Always show the tradeoff in plain words, for example: "6 min longer, avoids a 90
 
 - **Home map:** hexagon heat layer of scores, hour slider (defaults to current hour), locate-me button. Client receives h3 ids + scores and draws polygons with cellToBoundary.
 - **Plan route:** From, To (autocomplete, "use my location"), mode (Walk / Two-wheeler or Auto / Car), departure (Now / pick time).
-- **Results:** 2 to 3 route cards + coloured routes on the map, "Why this score" breakdown, weakest stretch highlighted, disclaimer line.
+- **Results:** 2 to 3 route cards + coloured routes on the map, "Why this score" breakdown, weakest stretch highlighted, disclaimer line. Every route card shows its confidence (high / medium / low), since most cells will be medium or low.
 - **Report a spot:** tap the map or use current location, pick a category, pick the hour (defaults to now). Anonymous, no login, no free text.
 - **About:** data sources, OSM attribution, how the score works, its limits, emergency number 112.
 

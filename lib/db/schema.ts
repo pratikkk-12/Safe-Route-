@@ -34,6 +34,8 @@ export const poi = pgTable(
     name: text("name"),
     openingHours: text("opening_hours"),
     is24x7: boolean("is_24x7").notNull().default(false),
+    // OSM emergency=yes (used to decide which hospitals are safety anchors).
+    emergency: boolean("emergency").notNull().default(false),
     geom: geometry("geom", "Point").notNull(),
     h3R9: text("h3_r9").notNull(),
   },

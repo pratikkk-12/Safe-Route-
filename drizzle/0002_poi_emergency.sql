@@ -1,0 +1,1 @@
+ALTER TABLE "poi" ADD COLUMN "emergency" boolean DEFAULT false NOT NULL;

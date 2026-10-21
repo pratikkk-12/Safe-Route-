@@ -127,16 +127,17 @@ async function writeDb(pois: PoiRow[], roads: RoadRow[]) {
   for (let i = 0; i < pois.length; i += BATCH) {
     const b = pois.slice(i, i + BATCH);
     await sql.query(
-      `INSERT INTO poi (osm_id, category, name, opening_hours, is_24x7, geom, h3_r9)
-       SELECT o, c, n, oh, t, ST_SetSRID(ST_MakePoint(x, y), 4326), h
-       FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[], $5::boolean[],
-                   $6::float8[], $7::float8[], $8::text[]) AS u(o, c, n, oh, t, x, y, h)`,
+      `INSERT INTO poi (osm_id, category, name, opening_hours, is_24x7, emergency, geom, h3_r9)
+       SELECT o, c, n, oh, t, e, ST_SetSRID(ST_MakePoint(x, y), 4326), h
+       FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[],
+                   $7::float8[], $8::float8[], $9::text[]) AS u(o, c, n, oh, t, e, x, y, h)`,
       [
         b.map((r) => r.osmId),
         b.map((r) => r.category),
         b.map((r) => r.name),
         b.map((r) => r.openingHours),
         b.map((r) => r.is24x7),
+        b.map((r) => r.emergency),
         b.map((r) => r.lon),
         b.map((r) => r.lat),
         b.map((r) => r.h3),

@@ -25,6 +25,8 @@ export interface PoiRow {
   name: string | null;
   openingHours: string | null;
   is24x7: boolean;
+  /** OSM emergency=yes. */
+  emergency: boolean;
   lon: number;
   lat: number;
   h3: string;
@@ -68,6 +70,7 @@ export function buildPoiRows(store: ElementStore): PoiRow[] {
       name: tags.name ?? tags["name:en"] ?? null,
       openingHours,
       is24x7: isOpen24x7(openingHours),
+      emergency: tags.emergency === "yes",
       lon: round7(lon),
       lat: round7(lat),
       h3: latLngToCell(lat, lon, H3_RESOLUTION),

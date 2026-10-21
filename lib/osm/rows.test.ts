@@ -43,6 +43,14 @@ describe("de-dupe on OSM type + id", () => {
     expect(buildPoiRows(store)).toHaveLength(2);
   });
 
+  it("records emergency=yes", () => {
+    const store: ElementStore = new Map();
+    mergeElements(store, [{ ...hospitalWay, tags: { ...hospitalWay.tags, emergency: "yes" } }, hospitalNode]);
+    const rows = buildPoiRows(store);
+    expect(rows.find((r) => r.name === "Hospital (building)")?.emergency).toBe(true);
+    expect(rows.find((r) => r.name === "Clinic (node)")?.emergency).toBe(false);
+  });
+
   it("uses the center point for POIs mapped as ways", () => {
     const store: ElementStore = new Map();
     mergeElements(store, [hospitalWay]);
