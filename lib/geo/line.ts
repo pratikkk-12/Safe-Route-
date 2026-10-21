@@ -85,3 +85,73 @@ export function splitLine(coords: LonLat[], maxM = 100): LinePiece[] {
   }
   return pieces;
 }
+
+export interface LineSample {
+  point: LonLat;
+  /** Distance from the start of the line, in metres. */
+  distM: number;
+}
+
+/**
+ * Points every `stepM` metres along the line, always including the start and the end.
+ * Used to look up the H3 cell (and hour) at each point of a route.
+ */
+export function sampleLine(coords: LonLat[], stepM = 25): LineSample[] {
+  if (coords.length === 0) return [];
+  const out: LineSample[] = [{ point: coords[0], distM: 0 }];
+  let walked = 0;
+  let next = stepM;
+  for (let i = 1; i < coords.length; i++) {
+    const seg = haversineM(coords[i - 1], coords[i]);
+    while (seg > 0 && next <= walked + seg) {
+      out.push({ point: lerp(coords[i - 1], coords[i], (next - walked) / seg), distM: next });
+      next += stepM;
+    }
+    walked += seg;
+  }
+  if (walked > out[out.length - 1].distM + 1e-6) out.push({ point: coords[coords.length - 1], distM: walked });
+  return out;
+}
+
+/** Distance in metres from point p to segment a-b (local equirectangular projection). */
+export function pointSegmentDistanceM(p: LonLat, a: LonLat, b: LonLat): number {
+  const k = Math.cos(toRad(p[1]));
+  const ax = (a[0] - p[0]) * k;
+  const ay = a[1] - p[1];
+  const bx = (b[0] - p[0]) * k;
+  const by = b[1] - p[1];
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+  const x = ax + t * dx;
+  const y = ay + t * dy;
+  return Math.sqrt(x * x + y * y) * (Math.PI / 180) * EARTH_RADIUS_M;
+}
+
+/**
+ * Share (0..1) of line `a`'s length that runs within `toleranceM` of line `b`.
+ * Used to drop route candidates that mostly duplicate another route.
+ */
+export function overlapShare(a: LonLat[], b: LonLat[], toleranceM = 20, stepM = 25): number {
+  const samples = sampleLine(a, stepM);
+  if (samples.length < 2 || b.length < 2) return 0;
+  // Bounding box of b, padded, to skip far-away samples quickly.
+  const pad = toleranceM / 111_000 / Math.cos(toRad(a[0][1]));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of b) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  let near = 0;
+  for (const { point } of samples) {
+    if (point[0] < minX - pad || point[0] > maxX + pad || point[1] < minY - pad || point[1] > maxY + pad) continue;
+    for (let i = 1; i < b.length; i++) {
+      if (pointSegmentDistanceM(point, b[i - 1], b[i]) <= toleranceM) {
+        near++;
+        break;
+      }
+    }
+  }
+  return near / samples.length;
+}

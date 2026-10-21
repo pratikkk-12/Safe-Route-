@@ -4,9 +4,12 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { MAP_STYLE_URL, PUNE_BBOX, PUNE_CENTER } from "@/lib/config";
+import type { PlanResponse } from "@/lib/routing/plan";
 import { currentPuneHour } from "@/lib/score-display";
 import DebugPoiLayer from "./DebugPoiLayer";
 import HourPanel from "./HourPanel";
+import RouteLayer from "./RouteLayer";
+import RoutePlanner from "./RoutePlanner";
 import ScoreLayer, { type ScoreStatus } from "./ScoreLayer";
 
 // The debug toggle shows in development, or in any build with ?debug in the URL.
@@ -21,6 +24,16 @@ export default function MapView() {
   const [hour, setHour] = useState<number | null>(null);
   const [status, setStatus] = useState<ScoreStatus>("loading");
   const onStatus = useCallback((s: ScoreStatus) => setStatus(s), []);
+  const [planning, setPlanning] = useState(false);
+  const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const onSelect = useCallback((id: number) => setSelectedId(id), []);
+  const onPlan = useCallback((p: PlanResponse | null) => {
+    setPlan(p);
+    setSelectedId(p?.routes[0]?.id ?? null);
+    // Show the heat layer for the departure hour.
+    if (p) setHour(p.departHour);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,9 +92,39 @@ export default function MapView() {
       <div ref={containerRef} className="h-full w-full" aria-label="Map of Pune" role="region" />
       {loadedMap && hour !== null && (
         <>
-          <ScoreLayer map={loadedMap} hour={hour} onStatus={onStatus} />
-          <HourPanel hour={hour} onHour={setHour} status={status} />
+          <ScoreLayer map={loadedMap} hour={hour} onStatus={onStatus} dimmed={!!plan} />
+          {!planning && (
+            <>
+              <button
+                type="button"
+                onClick={() => setPlanning(true)}
+                className="absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-white shadow-lg"
+              >
+                Plan a route
+              </button>
+              <HourPanel hour={hour} onHour={setHour} status={status} />
+            </>
+          )}
         </>
+      )}
+      {loadedMap && plan && (
+        <RouteLayer
+          map={loadedMap}
+          routes={plan.routes}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          // The results panel takes at most 50% of the height (see RoutePlanner).
+          fitPadding={{ top: 64, left: 32, right: 56, bottom: Math.round(window.innerHeight * 0.5) + 24 }}
+        />
+      )}
+      {planning && (
+        <RoutePlanner
+          onClose={() => setPlanning(false)}
+          onPlan={onPlan}
+          plan={plan}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
       )}
       {loadedMap && debug && <DebugPoiLayer map={loadedMap} />}
     </div>

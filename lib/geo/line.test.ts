@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { haversineM, lineLengthM, pointAlong, splitLine, type LonLat } from "./line";
+import { haversineM, lineLengthM, overlapShare, pointAlong, pointSegmentDistanceM, sampleLine, splitLine, type LonLat } from "./line";
 
 // ~0.0009 deg latitude ≈ 100 m
 const north = (lat: number): LonLat => [73.85, lat];
@@ -67,5 +67,61 @@ describe("splitLine", () => {
   it("returns nothing for degenerate lines", () => {
     expect(splitLine([north(18.5)])).toEqual([]);
     expect(splitLine([north(18.5), north(18.5)])).toEqual([]);
+  });
+});
+
+describe("sampleLine", () => {
+  it("samples every 25 m including both ends", () => {
+    const line = [north(18.5), north(18.5 + 110 / 111_195)]; // ~110 m
+    const s = sampleLine(line, 25);
+    expect(s.map((x) => Math.round(x.distM))).toEqual([0, 25, 50, 75, 100, 110]);
+    expect(s[0].point).toEqual(line[0]);
+    expect(s.at(-1)!.point).toEqual(line[1]);
+  });
+  it("keeps spacing across vertices", () => {
+    const line: LonLat[] = [
+      [73.85, 18.5],
+      [73.85, 18.5 + 30 / 111_195],
+      [73.85, 18.5 + 60 / 111_195],
+    ];
+    const d = sampleLine(line, 25).map((x) => Math.round(x.distM));
+    expect(d).toEqual([0, 25, 50, 60]);
+  });
+});
+
+describe("pointSegmentDistanceM", () => {
+  it("measures perpendicular distance to a segment", () => {
+    const a: LonLat = [73.85, 18.5];
+    const b: LonLat = [73.86, 18.5];
+    const p: LonLat = [73.855, 18.5 + 50 / 111_195];
+    expect(pointSegmentDistanceM(p, a, b)).toBeCloseTo(50, 0);
+  });
+  it("measures to the nearest end beyond the segment", () => {
+    const a: LonLat = [73.85, 18.5];
+    const b: LonLat = [73.85, 18.501];
+    expect(pointSegmentDistanceM([73.85, 18.502], a, b)).toBeCloseTo(111.2, 0);
+  });
+});
+
+describe("overlapShare", () => {
+  const straight: LonLat[] = [
+    [73.85, 18.5],
+    [73.85, 18.51],
+  ];
+  it("is ~1 for the same line", () => {
+    expect(overlapShare(straight, straight)).toBeCloseTo(1);
+  });
+  it("is 0 for a parallel line 200 m away", () => {
+    const shifted = straight.map(([x, y]) => [x + 200 / 105_400, y] as LonLat);
+    expect(overlapShare(straight, shifted)).toBe(0);
+  });
+  it("is ~0.5 when half the line is shared", () => {
+    const half: LonLat[] = [
+      [73.85, 18.5],
+      [73.85, 18.505],
+      [73.86, 18.51],
+    ];
+    expect(overlapShare(straight, half)).toBeGreaterThan(0.45);
+    expect(overlapShare(straight, half)).toBeLessThan(0.6);
   });
 });

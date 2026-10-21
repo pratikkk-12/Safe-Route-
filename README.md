@@ -66,6 +66,24 @@ API: `GET /api/cells?hour=22&bbox=w,s,e,n` -> `[{ h3, score, confidence }]`,
 Cells with too little mapped data are drawn as grey hatching ("Not enough data").
 `/about` explains the score, its known gaps and data sources.
 
+### Routing (Phase 4)
+
+Tap **Plan a route** on the map: From / To (Photon autocomplete, or "use my location"),
+mode (Walk / Two-wheeler or Auto / Car) and departure (Now / pick a time, Pune time).
+You get 2-3 scored routes with confidence, limited-data share, the weakest stretch and the
+tradeoff in plain words.
+
+Routing uses the public FOSSGIS OSRM by default (no key, max 1 request/second, cached
+10 min). Set `ROUTING_PROVIDER=ors` and `ORS_API_KEY` to use OpenRouteService instead.
+
+```powershell
+npm run dev                # in one terminal
+npm run route-check        # in another: runs the two acceptance trips against /api/route
+```
+
+API: `POST /api/route` with `{ from: {lat, lon}, to: {lat, lon}, mode: "walk" | "two_wheeler" | "car", departAt: ISO or "now" }`,
+`GET /api/geocode?q=FC Road` (server-side proxy to Photon, limited to Pune).
+
 ### Run
 
 ```powershell
@@ -82,6 +100,10 @@ npm run lint
 | `components/MapView.tsx` | Full-screen MapLibre map |
 | `components/DebugPoiLayer.tsx` | Debug toggle showing POIs from the database |
 | `app/api/debug/pois` | `GET ?bbox=w,s,e,n` → POIs as GeoJSON |
+| `app/api/route`, `app/api/geocode` | Route planning and place search |
+| `lib/routing/` | Provider interface (OSRM, ORS), via-point candidates, labels, planner |
+| `lib/scoring/route.ts` | Route scoring (25 m samples, weakest stretch) |
+| `components/RoutePlanner.tsx`, `RouteLayer.tsx`, `PlaceInput.tsx` | Plan route + results UI |
 | `lib/geo/` | Distance and line-splitting helpers |
 | `lib/osm/` | Overpass client and OSM tag classification |
 | `lib/config.ts` | Pune centre, bounding box, H3 resolution |

@@ -14,7 +14,8 @@
     "db:studio": "drizzle-kit studio",
     "postinstall": "node scripts/copy-maplibre-worker.mjs",
     "ingest-osm": "tsx scripts/ingest-osm.ts",
-    "compute-scores": "tsx scripts/compute-scores.ts"
+    "compute-scores": "tsx scripts/compute-scores.ts",
+    "route-check": "tsx scripts/route-check.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",

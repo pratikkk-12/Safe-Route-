@@ -94,10 +94,13 @@ export default function ScoreLayer({
   map,
   hour,
   onStatus,
+  dimmed = false,
 }: {
   map: MapLibreMap;
   hour: number;
   onStatus: (s: ScoreStatus) => void;
+  /** Fade the heat layer (e.g. while routes are shown on top). */
+  dimmed?: boolean;
 }) {
   const [h3, setH3] = useState<H3 | null>(null);
   const hourRef = useRef(hour);
@@ -220,6 +223,13 @@ export default function ScoreLayer({
       if (map.getSource(SOURCE)) map.removeSource(SOURCE);
     };
   }, [h3, map, onStatus]);
+
+  // Fade the hexagons while routes are on top.
+  useEffect(() => {
+    if (!h3 || !map.getLayer(FILL)) return;
+    map.setPaintProperty(FILL, "fill-opacity", dimmed ? ["*", 0.4, fillOpacity] : fillOpacity);
+    map.setPaintProperty(NO_DATA, "fill-opacity", dimmed ? 0.3 : 0.8);
+  }, [dimmed, h3, map]);
 
   // Reload when the hour changes.
   useEffect(() => {

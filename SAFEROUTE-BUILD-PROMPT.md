@@ -151,7 +151,7 @@ All scoring logic goes in lib/scoring/ as pure functions with Vitest unit tests.
 
 ## 6. Route scoring
 
-Geocode from and to with Photon (autocomplete, debounce 300 ms).
+Geocode from and to with Photon (autocomplete, debounce 300 ms), through a server-side proxy (GET /api/geocode) limited to the Pune bbox, so users' IPs aren't sent to Photon and results are cached.
 
 ### Routing provider interface
 
@@ -171,6 +171,7 @@ The provider is selected by env var `ROUTING_PROVIDER` (`osrm` | `ors`), default
 - Verify the exact URL format with one test call before building on it.
   (Checked 2026-10-21: both endpoints return `code: "Ok"` with GeoJSON LineStrings. `alternatives=3` is a maximum, not a guarantee: FC Road to Hinjewadi returned 2 routes. Handle 1 to 3 routes.)
 - Max 1 request per second (queue on the server), cache identical requests for 10 minutes, keep OSM attribution visible.
+- The public server occasionally returns a transient 5xx: retry once after a short pause (still through the queue), then show the friendly "busy" message.
 - User-Agent: `SafeRoute-Pune/0.1 (+https://github.com/pratikkk-12/Safe-Route-)`. Never put an email address in the User-Agent or any request.
 
 **2. ors: OpenRouteService Directions v2, used only when ORS_API_KEY is set**
