@@ -16,6 +16,9 @@ export default function MapView() {
     import("maplibre-gl").then((maplibregl) => {
       if (cancelled || !containerRef.current) return;
 
+      // Served from public/ (see scripts/copy-maplibre-worker.mjs).
+      maplibregl.setWorkerUrl(`/maplibre-gl-worker.mjs?v=${maplibregl.getVersion()}`);
+
       const pad = 0.15;
       const map = new maplibregl.Map({
         container: containerRef.current,
