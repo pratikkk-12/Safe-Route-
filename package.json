@@ -12,7 +12,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "tsx scripts/db-check.ts",
     "db:studio": "drizzle-kit studio",
-    "postinstall": "node scripts/copy-maplibre-worker.mjs"
+    "postinstall": "node scripts/copy-maplibre-worker.mjs",
+    "ingest-osm": "tsx scripts/ingest-osm.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",

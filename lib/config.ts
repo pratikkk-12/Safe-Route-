@@ -12,3 +12,8 @@ export const H3_RESOLUTION = 9;
 
 export const MAP_STYLE_URL =
   process.env.NEXT_PUBLIC_MAP_STYLE_URL ?? "https://tiles.openfreemap.org/styles/liberty";
+
+export const REPO_URL = "https://github.com/pratikkk-12/Safe-Route-";
+
+/** Sent to Overpass, OSRM, Photon etc. Never include an email address. */
+export const USER_AGENT = `SafeRoute-Pune/0.1 (+${REPO_URL})`;

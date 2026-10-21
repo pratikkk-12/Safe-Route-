@@ -1,13 +1,20 @@
 "use client";
 
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { MAP_STYLE_URL, PUNE_BBOX, PUNE_CENTER } from "@/lib/config";
+import DebugPoiLayer from "./DebugPoiLayer";
+
+// The debug toggle shows in development, or in any build with ?debug in the URL.
+const showDebug = () =>
+  process.env.NODE_ENV !== "production" || new URLSearchParams(window.location.search).has("debug");
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const [loadedMap, setLoadedMap] = useState<MapLibreMap | null>(null);
+  const [debug, setDebug] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +50,10 @@ export default function MapView() {
         "top-right",
       );
 
+      map.on("load", () => {
+        setLoadedMap(map);
+        setDebug(showDebug());
+      });
       mapRef.current = map;
     });
 
@@ -50,6 +61,7 @@ export default function MapView() {
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
+      setLoadedMap(null);
     };
   }, []);
 
@@ -58,6 +70,7 @@ export default function MapView() {
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" aria-label="Map of Pune" role="region" />
+      {loadedMap && debug && <DebugPoiLayer map={loadedMap} />}
     </div>
   );
 }

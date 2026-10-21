@@ -44,3 +44,6 @@ next-env.d.ts
 
 # copied from node_modules by postinstall
 /public/maplibre-gl-worker.mjs
+
+# Overpass response cache (scripts/ingest-osm.ts)
+/data/
