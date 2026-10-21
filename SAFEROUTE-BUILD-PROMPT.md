@@ -131,7 +131,7 @@ The provider is selected by env var `ROUTING_PROVIDER` (`osrm` | `ors`), default
 - Verify the exact URL format with one test call before building on it.
   (Checked 2026-10-21: both endpoints return `code: "Ok"` with GeoJSON LineStrings. `alternatives=3` is a maximum, not a guarantee: FC Road to Hinjewadi returned 2 routes. Handle 1 to 3 routes.)
 - Max 1 request per second (queue on the server), cache identical requests for 10 minutes, keep OSM attribution visible.
-- User-Agent: `SafeRoute-Pune/0.1 (+<GitHub repo URL>)`. Never put an email address in the User-Agent or any request.
+- User-Agent: `SafeRoute-Pune/0.1 (+https://github.com/pratikkk-12/Safe-Route-)`. Never put an email address in the User-Agent or any request.
 
 **2. ors: OpenRouteService Directions v2, used only when ORS_API_KEY is set**
 
