@@ -53,5 +53,11 @@ export default function MapView() {
     };
   }, []);
 
-  return <div ref={containerRef} className="absolute inset-0" aria-label="Map of Pune" role="region" />;
+  // MapLibre's CSS forces `position: relative` on the map element (and unlayered
+  // CSS beats Tailwind v4 utilities), so position a wrapper and fill it.
+  return (
+    <div className="absolute inset-0">
+      <div ref={containerRef} className="h-full w-full" aria-label="Map of Pune" role="region" />
+    </div>
+  );
 }
