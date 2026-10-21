@@ -3,13 +3,21 @@
 import { cellToLatLng, gridDisk } from "h3-js";
 import { haversineM, type LonLat } from "@/lib/geo/line";
 import type { OsmType, PoiCategory } from "@/lib/osm/classify";
-import { applyTransitFloor, confidenceFor, toScore, weightedScore, type Components, type Confidence } from "./combine";
+import {
+  applyTransitFloor,
+  confidenceFor,
+  finalScore,
+  isInsufficientData,
+  weightedScore,
+  type Components,
+  type Confidence,
+} from "./combine";
 import {
   TRANSIT_CATEGORIES,
   anchorsValue,
   isAnchorHospital,
   lightingValue,
-  reportsValue,
+  reportsAdjustment,
   roadTypeValue,
   type ReportInput,
   type RoadTotals,
@@ -47,13 +55,21 @@ export interface ScoringInput {
   reports: Map<string, ReportInput[]>;
 }
 
+/** One cell; every array is indexed by hour (0..23). */
 export interface CellResult {
   h3: string;
-  confidence: Confidence;
-  /** Index = hour. */
   scores: number[];
-  /** Normalized components per hour (lighting null when missing). */
+  confidence: Confidence[];
+  /** Too little data: the score is road type only, and the map shows "Not enough data". */
+  insufficient: boolean[];
+  /** Report adjustment in points, or null when reports don't qualify. */
+  reportsAdjustment: (number | null)[];
+  /** Weighted components (lighting null when missing). */
   components: Components[];
+  /** POIs in the cell plus ring-1, any category. */
+  poisNearby: number;
+  /** Non-transit POIs open per hour in the cell plus ring-1 (raw, before normalization). */
+  openNearby: number[];
 }
 
 export interface ScoringResult {
@@ -66,7 +82,7 @@ export interface ScoringResult {
     police: number;
     fuel24x7: number;
     cellsWithRealLit: number;
-    /** City median of the with-transit score per hour (0..1). */
+    /** Median with-transit score per hour over cells with enough data (0..1). */
     medians: number[];
   };
 }
@@ -83,7 +99,6 @@ function nearestM(from: LonLat, targets: LonLat[]): number {
 }
 
 export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): ScoringResult {
-
   // Per-cell hourly sums of "open" POIs, split into transit and everything else.
   const openByCell = new Map<string, Float64Array>();
   const transitByCell = new Map<string, Float64Array>();
@@ -115,12 +130,13 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
   const cellIds = [...new Set([...input.roads.keys(), ...input.pois.map((p) => p.h3)])].sort();
   const n = cellIds.length;
 
-  // Raw values.
+  // Raw values. Road type, lighting and anchors are already meaningful 0..1 shares.
   const rawOpen: Float64Array[] = [];
-  const rawTransit: Float64Array[] = [];
-  const rawLighting: (number | null)[] = [];
-  const rawRoadType: number[] = [];
-  const rawAnchors: number[] = [];
+  const logOpen: Float64Array[] = [];
+  const logTransit: Float64Array[] = [];
+  const lighting: (number | null)[] = [];
+  const roadType: number[] = [];
+  const anchors: number[] = [];
   const poisNearby: number[] = [];
 
   for (const id of cellIds) {
@@ -137,16 +153,17 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
       count += countByCell.get(nb) ?? 0;
     }
     rawOpen.push(open);
-    rawTransit.push(transit);
+    logOpen.push(open.map(Math.log1p));
+    logTransit.push(transit.map(Math.log1p));
     poisNearby.push(count);
 
     const roads = input.roads.get(id) ?? EMPTY_ROADS;
-    rawLighting.push(lightingValue(roads, cfg.lighting.minTaggedShare));
-    rawRoadType.push(roadTypeValue(roads));
+    lighting.push(lightingValue(roads, cfg.lighting.minTaggedShare));
+    roadType.push(roadTypeValue(roads));
 
     const [lat, lng] = cellToLatLng(id);
     const centre: LonLat = [lng, lat];
-    rawAnchors.push(
+    anchors.push(
       anchorsValue(
         { policeM: nearestM(centre, police), hospitalM: nearestM(centre, hospitals), fuelM: nearestM(centre, fuel) },
         cfg.anchors,
@@ -154,59 +171,75 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
     );
   }
 
-  // City-wide normalizers. Hourly components use all cell-hours, so night stays lower than day.
-  const clip = cfg.percentileClip;
+  // Count components: log(1 + count), clipped at city-wide percentiles over all
+  // cell-hours, so night stays lower than day.
   const flat = (arrs: Float64Array[]) => {
     const out = new Float64Array(arrs.length * 24);
     arrs.forEach((a, i) => out.set(a, i * 24));
     return out;
   };
-  // Open places: log(1 + count) so a few very busy cells don't flatten everyone else.
-  const logOpen = rawOpen.map((a) => a.map(Math.log1p));
-  const normOpen = makeNormalizer(flat(logOpen), cfg.openPlaces.percentileClip);
-  const normTransit = makeNormalizer(flat(rawTransit), clip);
-  const litValues = rawLighting.filter((v): v is number => v !== null);
-  const normLighting = litValues.length > 0 ? makeNormalizer(litValues, clip) : null;
-  const normRoadType = makeNormalizer(rawRoadType, clip);
-  const normAnchors = makeNormalizer(rawAnchors, clip);
+  const normOpen = makeNormalizer(flat(logOpen), cfg.countPercentileClip);
+  const normTransit = makeNormalizer(flat(logTransit), cfg.countPercentileClip);
 
-  // Components and both weighted scores per cell-hour.
+  // Per cell-hour: components, both weighted scores, report adjustment and data sufficiency.
   const components: Components[][] = [];
   const withT: Float64Array[] = [];
   const withoutT: Float64Array[] = [];
+  const adjustments: (number | null)[][] = [];
+  const insufficient: boolean[][] = [];
   for (let i = 0; i < n; i++) {
     const cellReports = input.reports.get(cellIds[i]) ?? [];
-    const lighting = rawLighting[i] === null || !normLighting ? null : normLighting(rawLighting[i]!);
-    const roadType = normRoadType(rawRoadType[i]);
-    const anchors = normAnchors(rawAnchors[i]);
     const perHour: Components[] = [];
     const w = new Float64Array(24);
     const wo = new Float64Array(24);
+    const adj: (number | null)[] = [];
+    const insuf: boolean[] = [];
     for (const h of HOURS) {
       const c: Components = {
         openPlaces: normOpen(logOpen[i][h]),
-        lighting,
-        roadType,
-        anchors,
-        transit: normTransit(rawTransit[i][h]),
-        reports: reportsValue(cellReports, h, cfg.reports),
+        lighting: lighting[i],
+        roadType: roadType[i],
+        anchors: anchors[i],
+        transit: normTransit(logTransit[i][h]),
       };
       perHour.push(c);
       w[h] = weightedScore(c, cfg.weights);
       wo[h] = weightedScore(c, cfg.weights, ["transit"]);
+      const a = reportsAdjustment(cellReports, h, cfg.reports);
+      adj.push(a);
+      insuf.push(isInsufficientData(poisNearby[i], lighting[i] !== null, a !== null, cfg.insufficientData.minPoisNearby));
     }
     components.push(perHour);
     withT.push(w);
     withoutT.push(wo);
+    adjustments.push(adj);
+    insufficient.push(insuf);
   }
 
-  const medians = HOURS.map((h) => percentile(Float64Array.from(withT, (w) => w[h]).sort(), 50));
+  // The transit floor uses the median over cells with enough data; thousands of empty
+  // cells would otherwise drag it to ~0.
+  const medians = HOURS.map((h) => {
+    const vals: number[] = [];
+    for (let i = 0; i < n; i++) if (!insufficient[i][h]) vals.push(withT[i][h]);
+    return vals.length ? percentile(Float64Array.from(vals).sort(), 50) : 0;
+  });
 
   const cells: CellResult[] = cellIds.map((h3, i) => ({
     h3,
-    confidence: confidenceFor(rawLighting[i] !== null, poisNearby[i], cfg.confidence.minPoisNearby),
-    scores: HOURS.map((h) => toScore(applyTransitFloor(withT[i][h], withoutT[i][h], medians[h]))),
+    poisNearby: poisNearby[i],
+    openNearby: Array.from(rawOpen[i], (v) => Math.round(v * 100) / 100),
+    insufficient: insufficient[i],
+    reportsAdjustment: adjustments[i],
     components: components[i],
+    confidence: HOURS.map((h) =>
+      confidenceFor(lighting[i] !== null, poisNearby[i], cfg.confidence.minPoisNearby, adjustments[i][h] !== null),
+    ),
+    scores: HOURS.map((h) =>
+      insufficient[i][h]
+        ? // Not enough data: road type only (used by routing; the map shows "Not enough data").
+          finalScore(roadType[i], null)
+        : finalScore(applyTransitFloor(withT[i][h], withoutT[i][h], medians[h]), adjustments[i][h]),
+    ),
   }));
 
   return {
@@ -217,7 +250,7 @@ export function computeCellScores(input: ScoringInput, cfg: ScoreConfig): Scorin
       anchorHospitalsEmergency: emergencyCount,
       police: police.length,
       fuel24x7: fuel.length,
-      cellsWithRealLit: litValues.length,
+      cellsWithRealLit: lighting.filter((v) => v !== null).length,
       medians,
     },
   };

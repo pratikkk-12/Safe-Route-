@@ -1,4 +1,4 @@
-// GET /api/cells/{h3}?hour=22 -> { h3, hour, score, confidence, components }
+// GET /api/cells/{h3}?hour=22 -> { h3, hour, score, confidence, insufficient, components }
 import { getCellDetail, parseHour } from "@/lib/scores";
 
 export async function GET(request: Request, ctx: RouteContext<"/api/cells/[h3]">) {

@@ -1,22 +1,15 @@
 {
   "weights": {
-    "openPlaces": 0.3,
-    "lighting": 0.2,
-    "roadType": 0.15,
-    "anchors": 0.15,
-    "transit": 0.1,
-    "reports": 0.1
+    "openPlaces": 0.3333,
+    "lighting": 0.2222,
+    "roadType": 0.1667,
+    "anchors": 0.1667,
+    "transit": 0.1111
   },
-  "percentileClip": [
+  "countPercentileClip": [
     5,
-    95
+    99
   ],
-  "openPlaces": {
-    "percentileClip": [
-      5,
-      99
-    ]
-  },
   "lighting": {
     "minTaggedShare": 0.3
   },
@@ -28,10 +21,16 @@
     "maxAgeDays": 90,
     "windowHours": 2,
     "halfLifeDays": 30,
-    "saturation": 3
+    "saturation": 3,
+    "minDistinctReporters": 2,
+    "maxPenaltyPoints": 20,
+    "maxBonusPoints": 10
   },
   "confidence": {
     "minPoisNearby": 5
+  },
+  "insufficientData": {
+    "minPoisNearby": 3
   },
   "openingHoursDefaults": {
     "restaurant": "11:00-23:30",

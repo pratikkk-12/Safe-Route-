@@ -77,8 +77,27 @@ describe("computeCellScores", () => {
   });
 
   it("sets confidence from real lit data and POIs nearby", () => {
-    expect(centre.confidence).toBe("high"); // lit data + 9 POIs
-    expect(quiet.confidence).toBe("low");
+    expect(centre.confidence[22]).toBe("high"); // lit data + 9 POIs
+    expect(quiet.confidence[22]).toBe("low");
+  });
+
+  it("uses raw shares for road type and anchors (no percentile stretch)", () => {
+    expect(centre.components[22].roadType).toBeCloseTo(0.8); // 800 of 1000 m main roads
+    expect(quiet.components[22].roadType).toBe(0);
+    expect(centre.components[22].anchors).toBeCloseTo(2 / 3); // police + 24x7 fuel, no anchor hospital
+  });
+
+  it("flags cells with too little data and scores them on road type only", () => {
+    // quiet: 0 POIs nearby, no lit data, no reports
+    expect(quiet.insufficient.every(Boolean)).toBe(true);
+    expect(quiet.scores[22]).toBe(0); // all residential
+    expect(centre.insufficient.some(Boolean)).toBe(false);
+    const mainRoadOnly = computeCellScores(
+      { ...city(), roads: new Map([...city().roads!, [QUIET, { totalM: 1000, mainM: 600, litYesM: 0, litNoM: 0 }]]) },
+      scoreConfig,
+    ).cells.find((c) => c.h3 === QUIET)!;
+    expect(mainRoadOnly.insufficient[22]).toBe(true);
+    expect(mainRoadOnly.scores[22]).toBe(60);
   });
 
   it("counts as anchors only emergency=yes, or 'hospital' in the name on a way/relation", () => {
@@ -108,18 +127,45 @@ describe("computeCellScores", () => {
     expect(q.components[23].openPlaces).toBe(0);
   });
 
-  it("treats reports as missing when a cell has none", () => {
-    expect(centre.components[22].reports).toBeNull();
+  it("applies reports as a post-score adjustment only with 2+ distinct reporters", () => {
+    const withReports = (reports: { hour: number; sentiment: number; ageDays: number; ipHash: string }[]) =>
+      computeCellScores({ ...city(), reports: new Map([[CENTRE, reports]]) }, scoreConfig).cells.find((x) => x.h3 === CENTRE)!;
+
+    const one = withReports([{ hour: 22, sentiment: -1, ageDays: 3, ipHash: "a" }]);
+    expect(one.reportsAdjustment[22]).toBeNull();
+    expect(one.scores[22]).toBe(centre.scores[22]);
+
+    const two = withReports([
+      { hour: 22, sentiment: -1, ageDays: 3, ipHash: "a" },
+      { hour: 22, sentiment: -1, ageDays: 3, ipHash: "b" },
+    ]);
+    expect(two.reportsAdjustment[22]).toBeLessThan(0);
+    expect(two.scores[22]).toBeLessThan(centre.scores[22]);
+    expect(two.reportsAdjustment[12]).toBeNull(); // only near the reported hour
+    expect(two.scores[12]).toBe(centre.scores[12]);
   });
 
-  it("uses reports only near the reported hour", () => {
+  it("raises confidence and lifts 'insufficient data' where reports qualify", () => {
     const r = computeCellScores(
-      { ...city(), reports: new Map([[CENTRE, [{ hour: 22, sentiment: -1, ageDays: 3 }]]]) },
+      {
+        ...city(),
+        reports: new Map([
+          [
+            QUIET,
+            [
+              { hour: 23, sentiment: 1, ageDays: 2, ipHash: "a" },
+              { hour: 23, sentiment: 1, ageDays: 2, ipHash: "b" },
+            ],
+          ],
+        ]),
+      },
       scoreConfig,
     );
-    const c = r.cells.find((x) => x.h3 === CENTRE)!;
-    expect(c.components[22].reports).toBeLessThan(0.5);
-    expect(c.components[12].reports).toBeNull();
+    const q = r.cells.find((c) => c.h3 === QUIET)!;
+    expect(q.insufficient[23]).toBe(false);
+    expect(q.confidence[23]).toBe("medium");
+    expect(q.insufficient[12]).toBe(true);
+    expect(q.confidence[12]).toBe("low");
   });
 
   it("treats fuel as a 24x7 anchor only when its hours allow", () => {

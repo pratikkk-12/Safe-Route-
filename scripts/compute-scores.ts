@@ -5,17 +5,24 @@
 //   npm run compute-scores -- --dry-run  # compute and print only
 import "./load-env";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
-import { cellToLatLng, gridDisk } from "h3-js";
+import { cellToLatLng, gridDisk, latLngToCell } from "h3-js";
 import { decodeOsmType, type PoiCategory } from "@/lib/osm/classify";
-import type { CellResult, PoiInput } from "@/lib/scoring/compute";
-import { HOURS, computeCellScores } from "@/lib/scoring/compute";
+import { HOURS, computeCellScores, type CellResult, type PoiInput } from "@/lib/scoring/compute";
 import type { ReportInput, RoadTotals } from "@/lib/scoring/components";
 import { COMPONENT_KEYS, scoreConfig } from "@/lib/scoring/config";
 import { percentile } from "@/lib/scoring/normalize";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const BATCH = 5000;
-const SAMPLE_HOURS = [21, 23];
+const TOP_HOUR = 21;
+
+// Places to check by hand against local knowledge.
+const CHECK_PLACES: { name: string; lat: number; lon: number }[] = [
+  { name: "Wagholi (clinic cluster)", lat: 18.5747, lon: 73.9557 },
+  { name: "Wagholi (clinic cluster)", lat: 18.5758, lon: 73.9586 },
+  { name: "Wagholi (clinic cluster)", lat: 18.577, lon: 73.9615 },
+  { name: "Hinjewadi Phase 3 (TCS / Tech Mahindra)", lat: 18.5842, lon: 73.6843 },
+];
 
 async function main() {
   const url = process.env.DATABASE_URL;
@@ -69,14 +76,14 @@ async function main() {
   );
 
   const reportRows = (await sql.query(
-    `SELECT h3_r9, hour, sentiment, EXTRACT(EPOCH FROM now() - created_at) / 86400 AS age_days
+    `SELECT h3_r9, hour, sentiment, ip_hash, EXTRACT(EPOCH FROM now() - created_at) / 86400 AS age_days
      FROM report WHERE status = 'approved' AND created_at > now() - make_interval(days => $1)`,
     [scoreConfig.reports.maxAgeDays],
-  )) as { h3_r9: string; hour: number; sentiment: number; age_days: string }[];
+  )) as { h3_r9: string; hour: number; sentiment: number; ip_hash: string; age_days: string }[];
   const reports = new Map<string, ReportInput[]>();
   for (const r of reportRows) {
     const list = reports.get(r.h3_r9) ?? [];
-    list.push({ hour: r.hour, sentiment: r.sentiment, ageDays: Number(r.age_days) });
+    list.push({ hour: r.hour, sentiment: r.sentiment, ageDays: Number(r.age_days), ipHash: r.ip_hash });
     reports.set(r.h3_r9, list);
   }
   console.log(`  ${pois.length} POIs, ${roads.size} road cells, ${reportRows.length} approved reports`);
@@ -96,6 +103,8 @@ async function main() {
 }
 
 function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellScores>["stats"], pois: PoiInput[]) {
+  const pct = (a: number, b: number) => `${((100 * a) / b).toFixed(1)}%`;
+
   console.log("\nAnchors");
   console.log(`  hospitals qualifying as anchors: ${stats.anchorHospitals} of ${stats.hospitals}`);
   console.log(
@@ -104,31 +113,51 @@ function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellSco
   console.log(`  police stations: ${stats.police}, 24x7 fuel stations: ${stats.fuel24x7}`);
   console.log(`  cells with real lit data: ${stats.cellsWithRealLit} of ${cells.length}`);
 
-  console.log("\nScore distribution per hour");
+  console.log("\nScore distribution per hour (cells with enough data)");
   console.table(
     HOURS.map((h) => {
-      const sorted = Float64Array.from(cells, (c) => c.scores[h]).sort();
+      const scored = cells.filter((c) => !c.insufficient[h]);
+      const sorted = Float64Array.from(scored, (c) => c.scores[h]).sort();
       return {
         hour: `${String(h).padStart(2, "0")}:00`,
         p10: Math.round(percentile(sorted, 10)),
         p50: Math.round(percentile(sorted, 50)),
         p90: Math.round(percentile(sorted, 90)),
+        scored: scored.length,
+        "not enough data": cells.length - scored.length,
       };
     }),
   );
 
-  console.log("Cells by confidence");
-  const byConf = { high: 0, medium: 0, low: 0 };
-  for (const c of cells) byConf[c.confidence]++;
-  console.table(
-    (["high", "medium", "low"] as const).map((k) => ({
-      confidence: k,
-      cells: byConf[k],
-      share: `${((100 * byConf[k]) / cells.length).toFixed(1)}%`,
-    })),
+  const insufficientCells = cells.filter((c) => c.insufficient[TOP_HOUR]).length;
+  console.log(
+    `Insufficient data at ${TOP_HOUR}:00: ${insufficientCells} of ${cells.length} cells (${pct(insufficientCells, cells.length)})` +
+      ` - fewer than ${scoreConfig.insufficientData.minPoisNearby} POIs nearby, no real lit data, no qualifying reports`,
   );
 
-  // Names of a few POIs in and around a cell, to recognise the place.
+  console.log("\nConfidence (all cell-hours)");
+  const conf = { high: 0, medium: 0, low: 0 };
+  for (const c of cells) for (const h of HOURS) conf[c.confidence[h]]++;
+  const total = cells.length * 24;
+  console.table((["high", "medium", "low"] as const).map((k) => ({ confidence: k, share: pct(conf[k], total) })));
+
+  const byId = new Map(cells.map((c) => [c.h3, c]));
+  console.log("Check: named places");
+  console.table(
+    CHECK_PLACES.map((p) => {
+      const c = byId.get(latLngToCell(p.lat, p.lon, 9));
+      if (!c) return { place: p.name, cell: "(no data)" };
+      return {
+        place: p.name,
+        "insufficient (21h / 23h)": `${c.insufficient[21]} / ${c.insufficient[23]}`,
+        "POIs nearby": c.poisNearby,
+        "open at 21h / 23h": `${c.openNearby[21]} / ${c.openNearby[23]}`,
+        lighting: c.components[0].lighting === null ? "missing" : c.components[0].lighting!.toFixed(2),
+        "score 21h / 23h": `${c.scores[21]} / ${c.scores[23]}`,
+      };
+    }),
+  );
+
   const poisByCell = new Map<string, PoiInput[]>();
   for (const p of pois) {
     const list = poisByCell.get(p.h3) ?? [];
@@ -140,28 +169,27 @@ function printStats(cells: CellResult[], stats: ReturnType<typeof computeCellSco
     const names = [...new Set(nearby.filter((p) => p.name).map((p) => p.name!))].slice(0, 3);
     return names.join("; ") || "(no named POIs nearby)";
   };
-  const builtUp = (c: CellResult) =>
-    gridDisk(c.h3, 1).reduce((s, id) => s + (poisByCell.get(id)?.length ?? 0), 0) >= 5;
 
-  for (const hour of SAMPLE_HOURS) {
-    const row = (c: CellResult) => {
-      const [lat, lng] = cellToLatLng(c.h3);
-      const comp = c.components[hour];
-      const out: Record<string, string | number> = {
-        score: c.scores[hour],
-        conf: c.confidence,
-        "lat,lon": `${lat.toFixed(4)},${lng.toFixed(4)}`,
-      };
-      for (const k of COMPONENT_KEYS) out[k] = comp[k] === null ? "-" : Number(comp[k]!.toFixed(2));
-      out.near = placeHint(c.h3);
-      return out;
-    };
-    const byScore = [...cells].sort((a, b) => b.scores[hour] - a.scores[hour]);
-    console.log(`\nTop 10 cells at ${hour}:00  ("-" = missing component, weight redistributed)`);
-    console.table(byScore.slice(0, 10).map(row));
-    console.log(`Bottom 5 built-up cells (5+ POIs in cell + ring-1) at ${hour}:00`);
-    console.table(byScore.filter(builtUp).slice(-5).reverse().map(row));
-  }
+  console.log(`\nTop 10 cells at ${TOP_HOUR}:00  ("-" = missing component, weight redistributed)`);
+  console.table(
+    cells
+      .filter((c) => !c.insufficient[TOP_HOUR])
+      .sort((a, b) => b.scores[TOP_HOUR] - a.scores[TOP_HOUR])
+      .slice(0, 10)
+      .map((c) => {
+        const [lat, lng] = cellToLatLng(c.h3);
+        const comp = c.components[TOP_HOUR];
+        const out: Record<string, string | number> = {
+          score: c.scores[TOP_HOUR],
+          conf: c.confidence[TOP_HOUR],
+          "lat,lon": `${lat.toFixed(4)},${lng.toFixed(4)}`,
+        };
+        for (const k of COMPONENT_KEYS) out[k] = comp[k] === null ? "-" : Number(comp[k]!.toFixed(2));
+        out.reports = c.reportsAdjustment[TOP_HOUR] ?? "-";
+        out.near = placeHint(c.h3);
+        return out;
+      }),
+  );
 }
 
 async function writeScores(sql: NeonQueryFunction<false, false>, cells: CellResult[]) {
@@ -173,7 +201,16 @@ async function writeScores(sql: NeonQueryFunction<false, false>, cells: CellResu
         const v = c.components[h][k];
         comp[k] = v === null ? null : Math.round(v * 1000) / 1000;
       }
-      return { h3: c.h3, hour: h, score: c.scores[h], confidence: c.confidence, components: JSON.stringify(comp) };
+      const adj = c.reportsAdjustment[h];
+      comp.reportsAdjustment = adj === null ? null : Math.round(adj * 10) / 10;
+      return {
+        h3: c.h3,
+        hour: h,
+        score: c.scores[h],
+        confidence: c.confidence[h],
+        insufficient: c.insufficient[h],
+        components: JSON.stringify(comp),
+      };
     }),
   );
 
@@ -187,18 +224,27 @@ async function writeScores(sql: NeonQueryFunction<false, false>, cells: CellResu
       batches.slice(i, i + CONCURRENCY).map(async (b) => {
         // Upsert, so the API keeps serving the previous scores while this runs.
         await sql.query(
-          `INSERT INTO cell_score (h3_r9, hour, score, confidence, components, updated_at)
-           SELECT h, hr, s, c, comp::jsonb, now()
-           FROM unnest($1::text[], $2::smallint[], $3::smallint[], $4::text[], $5::text[]) AS u(h, hr, s, c, comp)
+          `INSERT INTO cell_score (h3_r9, hour, score, confidence, insufficient_data, components, updated_at)
+           SELECT h, hr, s, c, i, comp::jsonb, now()
+           FROM unnest($1::text[], $2::smallint[], $3::smallint[], $4::text[], $5::boolean[], $6::text[])
+             AS u(h, hr, s, c, i, comp)
            ON CONFLICT (h3_r9, hour) DO UPDATE SET
              score = EXCLUDED.score, confidence = EXCLUDED.confidence,
+             insufficient_data = EXCLUDED.insufficient_data,
              components = EXCLUDED.components, updated_at = EXCLUDED.updated_at`,
-          [b.map((r) => r.h3), b.map((r) => r.hour), b.map((r) => r.score), b.map((r) => r.confidence), b.map((r) => r.components)],
+          [
+            b.map((r) => r.h3),
+            b.map((r) => r.hour),
+            b.map((r) => r.score),
+            b.map((r) => r.confidence),
+            b.map((r) => r.insufficient),
+            b.map((r) => r.components),
+          ],
         );
         done += b.length;
-        process.stdout.write(`\r  ${done}/${rows.length}`);
       }),
     );
+    process.stdout.write(`\r  ${done}/${rows.length}`);
   }
   process.stdout.write("\n");
   const stale = (await sql.query(`DELETE FROM cell_score WHERE updated_at < $1 RETURNING 1`, [runStart])) as unknown[];

@@ -6,7 +6,7 @@ import {
   hourDistance,
   isAnchorHospital,
   lightingValue,
-  reportsValue,
+  reportsAdjustment,
   roadTypeValue,
 } from "./components";
 
@@ -78,45 +78,47 @@ describe("hourDistance", () => {
   });
 });
 
-describe("reportsValue", () => {
-  const cfg = scoreConfig.reports; // 90 days, +/-2 h, half-life 30, saturation 3
-  it("is missing (null) with no reports", () => {
-    expect(reportsValue([], 22, cfg)).toBeNull();
+describe("reportsAdjustment", () => {
+  const cfg = scoreConfig.reports; // 90 days, +/-2 h, half-life 30, 2 reporters, -20..+10
+  const r = (sentiment: number, ipHash: string, hour = 22, ageDays = 1) => ({ hour, sentiment, ageDays, ipHash });
+
+  it("is null with no reports", () => {
+    expect(reportsAdjustment([], 22, cfg)).toBeNull();
   });
-  it("goes down for negative and up for positive reports", () => {
-    expect(reportsValue([{ hour: 22, sentiment: -1, ageDays: 1 }], 22, cfg)).toBeLessThan(0.5);
-    expect(reportsValue([{ hour: 22, sentiment: 1, ageDays: 1 }], 22, cfg)).toBeGreaterThan(0.5);
+  it("needs at least 2 distinct reporters", () => {
+    expect(reportsAdjustment([r(-1, "a"), r(-1, "a"), r(-1, "a")], 22, cfg)).toBeNull();
+    expect(reportsAdjustment([r(-1, "a"), r(-1, "b")], 22, cfg)).toBeLessThan(0);
+  });
+  it("adds up to +10 points for positive reports", () => {
+    const adj = reportsAdjustment([r(1, "a"), r(1, "b")], 22, cfg)!;
+    expect(adj).toBeGreaterThan(0);
+    expect(adj).toBeLessThanOrEqual(10);
+  });
+  it("subtracts up to 20 points for negative reports", () => {
+    const many = Array.from({ length: 40 }, (_, i) => r(-1, `ip${i}`));
+    const adj = reportsAdjustment(many, 22, cfg)!;
+    expect(adj).toBeGreaterThanOrEqual(-20);
+    expect(adj).toBeCloseTo(-20, 1);
+  });
+  it("weighs negative reports twice as heavily as positive ones", () => {
+    const neg = reportsAdjustment([r(-1, "a"), r(-1, "b")], 22, cfg)!;
+    const pos = reportsAdjustment([r(1, "a"), r(1, "b")], 22, cfg)!;
+    expect(neg).toBeCloseTo(-2 * pos);
   });
   it("only counts reports within +/- 2 hours, wrapping midnight", () => {
-    const r = [{ hour: 1, sentiment: -1, ageDays: 0 }];
-    expect(reportsValue(r, 23, cfg)).toBeLessThan(0.5);
-    expect(reportsValue(r, 20, cfg)).toBeNull();
+    const reports = [r(-1, "a", 1, 0), r(-1, "b", 0, 0)];
+    expect(reportsAdjustment(reports, 23, cfg)).toBeLessThan(0);
+    expect(reportsAdjustment(reports, 20, cfg)).toBeNull();
   });
   it("ignores reports older than 90 days", () => {
-    expect(reportsValue([{ hour: 22, sentiment: -1, ageDays: 91 }], 22, cfg)).toBeNull();
+    expect(reportsAdjustment([r(-1, "a", 22, 91), r(-1, "b", 22, 91)], 22, cfg)).toBeNull();
   });
   it("halves a report's weight every 30 days", () => {
-    const fresh = reportsValue([{ hour: 22, sentiment: -1, ageDays: 0 }], 22, cfg);
-    const twoFresh = reportsValue(
-      [
-        { hour: 22, sentiment: -1, ageDays: 30 },
-        { hour: 22, sentiment: -1, ageDays: 30 },
-      ],
-      22,
-      cfg,
-    );
-    expect(twoFresh).toBeCloseTo(fresh!, 10);
+    const fresh = reportsAdjustment([r(-1, "a", 22, 0), r(-1, "b", 22, 0)], 22, cfg)!;
+    const old = reportsAdjustment([r(-1, "a", 22, 30), r(-1, "b", 22, 30), r(-1, "c", 22, 30), r(-1, "d", 22, 30)], 22, cfg)!;
+    expect(old).toBeCloseTo(fresh, 10);
   });
-  it("saturates instead of growing without bound", () => {
-    const many = Array.from({ length: 50 }, () => ({ hour: 22, sentiment: -1, ageDays: 0 }));
-    expect(reportsValue(many, 22, cfg)).toBeGreaterThanOrEqual(0);
-    expect(reportsValue(many, 22, cfg)).toBeCloseTo(0, 3);
-  });
-  it("is 0.5 when positive and negative reports cancel out", () => {
-    const r = [
-      { hour: 22, sentiment: 1, ageDays: 5 },
-      { hour: 22, sentiment: -1, ageDays: 5 },
-    ];
-    expect(reportsValue(r, 22, cfg)).toBe(0.5);
+  it("qualifies but adds nothing when reports cancel out", () => {
+    expect(reportsAdjustment([r(1, "a"), r(-1, "b")], 22, cfg)).toBe(0);
   });
 });

@@ -63,21 +63,26 @@ export interface ReportInput {
   hour: number;
   sentiment: number; // -1 or +1
   ageDays: number;
+  /** HMAC of the reporter's IP; used to require several distinct reporters. */
+  ipHash: string;
 }
 
 /**
- * null (missing) when no approved report falls within maxAgeDays and +/- windowHours of
- * `hour`. Otherwise 0.5 + 0.5 x tanh(decayed sentiment sum / saturation): below 0.5 for
- * mostly negative reports, above for mostly positive.
+ * Community reports as a post-score adjustment in points, or null when they don't
+ * qualify for this hour. Qualifying = reports within maxAgeDays and +/- windowHours
+ * of `hour` from at least minDistinctReporters distinct ip_hashes. The decayed
+ * sentiment sum maps through tanh to [-maxPenaltyPoints, +maxBonusPoints].
  */
-export function reportsValue(reports: ReportInput[], hour: number, cfg: ScoreConfig["reports"]): number | null {
+export function reportsAdjustment(reports: ReportInput[], hour: number, cfg: ScoreConfig["reports"]): number | null {
   let sum = 0;
-  let counted = 0;
+  const reporters = new Set<string>();
   for (const r of reports) {
     if (r.ageDays < 0 || r.ageDays > cfg.maxAgeDays) continue;
     if (hourDistance(r.hour, hour) > cfg.windowHours) continue;
     sum += r.sentiment * 0.5 ** (r.ageDays / cfg.halfLifeDays);
-    counted++;
+    reporters.add(r.ipHash);
   }
-  return counted === 0 ? null : 0.5 + 0.5 * Math.tanh(sum / cfg.saturation);
+  if (reporters.size < cfg.minDistinctReporters) return null;
+  const t = Math.tanh(sum / cfg.saturation);
+  return t < 0 ? t * cfg.maxPenaltyPoints : t * cfg.maxBonusPoints;
 }

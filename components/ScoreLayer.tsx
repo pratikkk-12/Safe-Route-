@@ -9,12 +9,14 @@ import type {
   Popup,
 } from "maplibre-gl";
 import type { CellDetail, CellScore } from "@/lib/scores";
-import { COMPONENT_LABELS, CONFIDENCE_TEXT, HEAT_STOPS, formatHour } from "@/lib/score-display";
+import { COMPONENT_LABELS, CONFIDENCE_TEXT, HEAT_STOPS, NOT_ENOUGH_DATA, formatHour } from "@/lib/score-display";
 import { COMPONENT_KEYS } from "@/lib/scoring/config";
 
 const SOURCE = "cell-scores";
 const FILL = "cell-scores-fill";
+const NO_DATA = "cell-scores-no-data";
 const LINE = "cell-scores-line";
+const HATCH = "hatch-no-data";
 const POI_LAYER = "debug-pois-circles";
 
 export type ScoreStatus = "loading" | "ok" | "empty" | "error";
@@ -37,25 +39,53 @@ const fillOpacity = [
   0.34,
 ] as unknown as ExpressionSpecification;
 
+/** Grey diagonal hatch for "Not enough data" cells, drawn once on a canvas. */
+export function hatchImage(size = 16): ImageData {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "rgba(148, 163, 184, 0.35)";
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = "rgba(71, 85, 105, 0.55)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (const o of [-size, 0, size]) {
+    ctx.moveTo(o, size);
+    ctx.lineTo(o + size, 0);
+  }
+  ctx.stroke();
+  return ctx.getImageData(0, 0, size, size);
+}
+
 type H3 = typeof import("h3-js");
 
-const escapeHtml = (s: string) =>
-  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
 function detailHtml(d: CellDetail): string {
+  if (d.insufficient) {
+    return `<div class="text-sm text-zinc-900 min-w-52">
+      <p class="font-semibold">${NOT_ENOUGH_DATA.label}</p>
+      <p class="mt-1 text-xs text-zinc-700">${NOT_ENOUGH_DATA.popup}</p>
+      <p class="mt-2 text-[11px] text-zinc-500"><a class="underline" href="/about#known-gaps">Why some areas lack data</a></p>
+    </div>`;
+  }
+  const bar = (v: number) =>
+    `<span class="inline-block h-1.5 w-16 rounded bg-zinc-200 align-middle"><span class="block h-1.5 rounded bg-zinc-700" style="width:${Math.round(v * 100)}%"></span></span>`;
   const rows = COMPONENT_KEYS.map((k) => {
     const v = d.components[k];
     const { label, hint } = COMPONENT_LABELS[k];
-    const value =
-      v === null
-        ? `<span class="text-zinc-500">${k === "reports" ? "none yet" : "no data"}</span>`
-        : `<span class="inline-block h-1.5 w-16 rounded bg-zinc-200 align-middle"><span class="block h-1.5 rounded bg-zinc-700" style="width:${Math.round(v * 100)}%"></span></span>`;
-    return `<li class="flex items-center justify-between gap-3" title="${escapeHtml(hint)}"><span>${label}</span>${value}</li>`;
+    const value = v === null || v === undefined ? `<span class="text-zinc-500">no data</span>` : bar(v);
+    return `<li class="flex items-center justify-between gap-3" title="${hint}"><span>${label}</span>${value}</li>`;
   }).join("");
+  const adj = d.components.reportsAdjustment;
+  const reports =
+    adj === null || adj === undefined
+      ? `<span class="text-zinc-500">none yet</span>`
+      : `<span class="tabular-nums">${adj > 0 ? "+" : ""}${Math.round(adj)} pts</span>`;
   return `<div class="text-sm text-zinc-900 min-w-52">
     <p class="font-semibold">Night activity ${d.score}/100 at ${formatHour(d.hour)}</p>
     <p class="text-xs text-zinc-600 mb-1.5">${CONFIDENCE_TEXT[d.confidence]}</p>
-    <ul class="space-y-1 text-xs">${rows}</ul>
+    <ul class="space-y-1 text-xs">${rows}
+      <li class="flex items-center justify-between gap-3 border-t border-zinc-200 pt-1"><span>Community reports</span>${reports}</li>
+    </ul>
     <p class="mt-2 text-[11px] text-zinc-500">Indicator only, not a guarantee of safety.</p>
   </div>`;
 }
@@ -88,8 +118,28 @@ export default function ScoreLayer({
 
     // Put hexagons under the first label layer so street names stay readable.
     const firstSymbol = map.getStyle().layers.find((l) => l.type === "symbol")?.id;
+    if (!map.hasImage(HATCH)) map.addImage(HATCH, hatchImage(), { pixelRatio: 2 });
     map.addSource(SOURCE, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    map.addLayer({ id: FILL, type: "fill", source: SOURCE, paint: { "fill-color": fillColor, "fill-opacity": fillOpacity } }, firstSymbol);
+    map.addLayer(
+      {
+        id: FILL,
+        type: "fill",
+        source: SOURCE,
+        filter: ["!", ["get", "insufficient"]],
+        paint: { "fill-color": fillColor, "fill-opacity": fillOpacity },
+      },
+      firstSymbol,
+    );
+    map.addLayer(
+      {
+        id: NO_DATA,
+        type: "fill",
+        source: SOURCE,
+        filter: ["get", "insufficient"],
+        paint: { "fill-pattern": HATCH, "fill-opacity": 0.8 },
+      },
+      firstSymbol,
+    );
     map.addLayer(
       {
         id: LINE,
@@ -156,6 +206,7 @@ export default function ScoreLayer({
 
     map.on("moveend", onMove);
     map.on("click", FILL, onClick);
+    map.on("click", NO_DATA, onClick);
     load();
 
     return () => {
@@ -164,8 +215,8 @@ export default function ScoreLayer({
       popupRef.current?.remove();
       map.off("moveend", onMove);
       map.off("click", FILL, onClick);
-      if (map.getLayer(LINE)) map.removeLayer(LINE);
-      if (map.getLayer(FILL)) map.removeLayer(FILL);
+      map.off("click", NO_DATA, onClick);
+      for (const id of [LINE, NO_DATA, FILL]) if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource(SOURCE)) map.removeSource(SOURCE);
     };
   }, [h3, map, onStatus]);

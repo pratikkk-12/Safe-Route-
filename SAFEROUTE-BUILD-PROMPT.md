@@ -88,16 +88,22 @@ Rough size: about 12,000 cells x 24 hours, around 300k cell_score rows. Fine for
 
 ## 5. Night Activity Score
 
-For each cell and each hour, compute these components. Normalize each to 0 to 1 using city-wide percentiles (clip at p5 and p95; open places use log(1 + count) clipped at p5 and p99; hour-dependent components use percentiles over all cell-hours, so night stays lower than day). Weights and all tunable values live in config/score-weights.json so I can tune them without code changes.
+For each cell and each hour, compute the weighted components below, then apply community reports as a post-score adjustment. Weights and all tunable values live in config/score-weights.json so I can tune them without code changes.
+
+Normalization:
+
+- Count components (open places, transit): log(1 + count), clipped at city-wide p5 and p99 over all cell-hours (so night stays lower than day).
+- Components already on a meaningful 0 to 1 scale (road type share, lighting share, anchor proximity) are used as-is, with no percentile stretch.
 
 | Component | Weight | How |
 | --- | --- | --- |
-| Open places at that hour | 0.30 | Count POIs open at that hour (non-transit categories) in the cell plus ring-1 neighbours. "Open at hour h" = the fraction of 28 checks (h:00, h:15, h:30, h:45 on each of the 7 weekdays) at which it is open. Real opening_hours tags always win; if the tag is missing or unparseable, use the default from config (below). Normalized on log(1 + count), clipped at p5 and p99 |
-| Lighting | 0.20 | Only cells with real lit data: at least 30% of the cell's road length has a lit tag (config: lighting.minTaggedShare). Value = share of the tagged length with lit=yes. Otherwise lighting is **missing**: it is NOT estimated from road class (that would double-count road type), and its weight is redistributed proportionally across the other components |
-| Road type | 0.15 | Length share of trunk/primary/secondary/tertiary vs residential/service/unclassified/track/path/footway |
-| Safety anchors nearby | 0.15 | Distance from the cell centre to the nearest police station, anchor hospital and 24x7 fuel station; each gives full credit within 300 m, zero beyond 1.5 km (linear between), averaged. A hospital is an anchor only if emergency=yes, OR its name contains "hospital" (case-insensitive) AND it is mapped as a way/relation (building outline). Name-only nodes are not anchors. Non-anchor "hospitals" (mostly clinics) count only as open places. A fuel station is 24x7 if its tag says so, or it has no tag (category default) |
-| Transit presence | 0.10 | Bus stops, bus stations, metro and railway stations open at that hour (per-category defaults) in the cell plus ring-1 neighbours. OSM bus stop coverage is incomplete, so transit is a **bonus**: zero transit gives 0 for the component, but it alone must not push a cell below the city median for that hour (see below) |
-| Community reports | 0.10 | Approved reports from the last 90 days within plus or minus 2 hours of this hour (wrapping midnight), time-decayed (half-life 30 days). If none qualify for that cell and hour, reports are **missing** and their weight is redistributed (same as lighting; no neutral value). Otherwise value = 0.5 + 0.5 x tanh(sum of sentiment x decay / saturation) |
+| Open places at that hour | 0.3333 | Non-transit POIs open at that hour in the cell plus ring-1 neighbours. "Open at hour h" = the fraction of 28 checks (h:00, h:15, h:30, h:45 on each of the 7 weekdays) at which it is open. Real opening_hours tags always win; if missing or unparseable, use the default (below) |
+| Lighting | 0.2222 | Only cells with real lit data: at least 30% of the cell's road length has a lit tag (config: lighting.minTaggedShare). Value = share of the tagged length with lit=yes. Otherwise lighting is **missing**: it is NOT estimated from road class, and its weight is redistributed proportionally across the other components |
+| Road type | 0.1667 | Length share of trunk/primary/secondary/tertiary vs residential/service/unclassified/track/path/footway |
+| Safety anchors nearby | 0.1667 | Distance from the cell centre to the nearest police station, anchor hospital and 24x7 fuel station; each gives full credit within 300 m, zero beyond 1.5 km (linear between), averaged. A hospital is an anchor only if emergency=yes, OR its name contains "hospital" (case-insensitive) AND it is mapped as a way/relation. Name-only nodes are not anchors; non-anchor "hospitals" (mostly clinics) count only as open places. A fuel station is 24x7 if its tag says so or it has no tag |
+| Transit presence | 0.1111 | Bus stops, bus stations, metro and railway stations in service at that hour (defaults below) in the cell plus ring-1. A **bonus**: see combining |
+
+(The original weights 0.30 / 0.20 / 0.15 / 0.15 / 0.10 with reports' 0.10 redistributed proportionally.)
 
 Opening-hours defaults (used only when opening_hours is missing or unparseable; real tags always override):
 
@@ -112,22 +118,36 @@ Opening-hours defaults (used only when opening_hours is missing or unparseable; 
 | bus_station | 05:00-23:00 |
 | bus_stop | 05:30-23:00 |
 
+Community reports (post-score adjustment, not a weighted component):
+
+- Only applies when approved reports from at least 2 distinct ip_hashes exist for that cell within plus or minus 2 hours of this hour (wrapping midnight) over the last 90 days. Evaluated per hour, not per cell.
+- Time decay half-life 30 days. Adjustment = tanh(decayed sentiment sum / saturation), scaled to -20 points (negative) .. +10 points (positive).
+- Qualifying reports raise the cell's confidence one level for that hour (low to medium, medium to high).
+
 Combining:
 
-- with = weighted sum of available components (if lighting and/or reports are missing, the remaining weights are scaled up proportionally so they still sum to 1).
-- without_transit = the same, with transit removed and the rest re-weighted to sum to 1.
-- median_h = city median of `with` at that hour.
-- Final = max(with, min(without_transit, median_h)) x 100, rounded. Transit can raise a score; lacking transit can lower an above-median cell at most to the median, and never lowers a below-median cell.
+- with = weighted mean of available components (missing lighting drops out; remaining weights scale up proportionally).
+- without_transit = the same, with transit removed.
+- median_h = median of `with` at that hour over cells with enough data.
+- base = max(with, min(without_transit, median_h)): lacking transit can lower an above-median cell at most to the median, and never lowers a below-median cell.
+- final = clamp(base x 100 + report adjustment, 0, 100), rounded.
 
-Confidence:
+Confidence (per cell and hour):
 
 - high: real lit data present and 5+ POIs nearby (cell plus ring-1, any category)
 - medium: one of those
 - low: neither
+- raised one level where reports qualify
 
-Since real lit data is rare in Pune OSM, most cells will be medium or low. That is expected and must be shown, not hidden.
+Insufficient data (per cell and hour): fewer than 3 POIs in the cell plus ring-1, no real lighting data, and no qualifying reports.
 
-All scoring logic goes in lib/scoring/ as pure functions with Vitest unit tests. scripts/compute-scores.ts prints the score distribution per hour (p10, p50, p90), share of cells by confidence, the number of hospitals that qualify as anchors, and the 5 highest- and lowest-scoring cells at 23:00 with their components.
+- Stored in cell_score.insufficient_data; the stored score is road type only (used by routing).
+- Heat map: grey hatch pattern, legend label "Not enough data", not a score colour.
+- Popup: "Not enough mapped data here. This doesn't mean the area is unsafe."
+
+Since real lit data is rare in Pune OSM, most cells will be medium or low confidence, and many are insufficient data. That is expected and must be shown, not hidden.
+
+All scoring logic goes in lib/scoring/ as pure functions with Vitest unit tests. scripts/compute-scores.ts prints the score distribution per hour (p10, p50, p90), share of cells by confidence, insufficient-data counts, the number of hospitals that qualify as anchors, and the top cells with their components.
 
 ## 6. Route scoring
 
@@ -179,6 +199,7 @@ For each route:
 - Look up cell_score for the departure hour (use the hour each sample is reached, based on cumulative duration).
 - Route score = 0.7 x length-weighted mean + 0.3 x the lowest 200 m rolling average. This penalizes a route with one very dark stretch.
 - Return: distance, duration, score, confidence, label, weakest stretch (geometry + top 2 reasons from components), per-segment colours. Route confidence = the length-weighted mix of cell confidences along the route, shown on every route card.
+- Cells marked insufficient data are scored on road type only. Each route card shows "X% of this route passes through areas with limited data" (share of route length in insufficient-data cells).
 
 Labels: Safest, Fastest, Balanced (if a third route exists).
 
@@ -192,7 +213,7 @@ Always show the tradeoff in plain words, for example: "6 min longer, avoids a 90
 - **Plan route:** From, To (autocomplete, "use my location"), mode (Walk / Two-wheeler or Auto / Car), departure (Now / pick time).
 - **Results:** 2 to 3 route cards + coloured routes on the map, "Why this score" breakdown, weakest stretch highlighted, disclaimer line. Every route card shows its confidence (high / medium / low), since most cells will be medium or low.
 - **Report a spot:** tap the map or use current location, pick a category, pick the hour (defaults to now). Anonymous, no login, no free text.
-- **About:** data sources, OSM attribution, how the score works, its limits, emergency number 112.
+- **About:** data sources, OSM attribution, how the score works, its limits, emergency number 112, and a "Known gaps" section: OSM data in Pune is incomplete; office campuses and night shifts (e.g. Hinjewadi, Kharadi, Magarpatta) don't appear as activity; community reports are what improve the score over time.
 
 Tone: plain, calm, never alarmist. Never call an area or neighbourhood "unsafe". Use "low night activity" and "busier, better-lit route" language.
 

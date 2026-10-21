@@ -1,4 +1,4 @@
-// GET /api/cells?hour=22&bbox=w,s,e,n -> [{ h3, score, confidence }]
+// GET /api/cells?hour=22&bbox=w,s,e,n -> [{ h3, score, confidence, insufficient }]
 import { parseBbox } from "@/lib/http/bbox";
 import { getCellScores, parseHour } from "@/lib/scores";
 

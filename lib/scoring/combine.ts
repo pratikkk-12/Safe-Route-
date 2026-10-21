@@ -1,6 +1,6 @@
 import type { ComponentKey } from "./config";
 
-/** Normalized component values; lighting and reports may be null (missing). */
+/** Normalized weighted components; lighting may be null (missing). */
 export type Components = Record<ComponentKey, number | null>;
 
 /**
@@ -16,7 +16,7 @@ export function weightedScore(
   let wSum = 0;
   for (const k of Object.keys(weights) as ComponentKey[]) {
     const v = c[k];
-    if (v === null || exclude.includes(k)) continue;
+    if (v === null || v === undefined || exclude.includes(k)) continue;
     sum += weights[k] * v;
     wSum += weights[k];
   }
@@ -31,13 +31,24 @@ export function applyTransitFloor(withTransit: number, withoutTransit: number, m
   return Math.max(withTransit, Math.min(withoutTransit, median));
 }
 
-export function toScore(x: number): number {
-  return Math.round(Math.min(1, Math.max(0, x)) * 100);
+/** 0..1 weighted score plus a report adjustment in points, clamped and rounded to 0..100. */
+export function finalScore(weighted: number, adjustmentPoints: number | null): number {
+  return Math.round(Math.min(100, Math.max(0, weighted * 100 + (adjustmentPoints ?? 0))));
 }
 
 export type Confidence = "high" | "medium" | "low";
+const LEVELS: Confidence[] = ["low", "medium", "high"];
 
-export function confidenceFor(hasRealLit: boolean, poisNearby: number, minPois: number): Confidence {
-  const n = Number(hasRealLit) + Number(poisNearby >= minPois);
-  return n === 2 ? "high" : n === 1 ? "medium" : "low";
+/**
+ * high = real lit data AND minPois+ POIs nearby; medium = one of them; low = neither.
+ * Qualifying community reports raise it one level.
+ */
+export function confidenceFor(hasRealLit: boolean, poisNearby: number, minPois: number, hasReports = false): Confidence {
+  const n = Number(hasRealLit) + Number(poisNearby >= minPois) + Number(hasReports);
+  return LEVELS[Math.min(2, n)];
+}
+
+/** Too little mapped data to score: few POIs, no real lighting data and no qualifying reports. */
+export function isInsufficientData(poisNearby: number, hasRealLit: boolean, hasReports: boolean, minPois: number): boolean {
+  return poisNearby < minPois && !hasRealLit && !hasReports;
 }

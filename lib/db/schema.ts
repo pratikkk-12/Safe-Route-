@@ -71,7 +71,9 @@ export const cellScore = pgTable(
     hour: smallint("hour").notNull(),
     score: smallint("score").notNull(),
     confidence: text("confidence").notNull(),
-    components: jsonb("components").$type<Record<string, number>>().notNull(),
+    components: jsonb("components").$type<Record<string, number | null>>().notNull(),
+    // Too little mapped data to score this cell-hour (scored on road type only).
+    insufficientData: boolean("insufficient_data").notNull().default(false),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.h3R9, t.hour] }), index("cell_score_hour_idx").on(t.hour)],

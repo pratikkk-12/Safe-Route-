@@ -1,0 +1,1 @@
+ALTER TABLE "cell_score" ADD COLUMN "insufficient_data" boolean DEFAULT false NOT NULL;

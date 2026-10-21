@@ -1,9 +1,13 @@
 "use client";
 
-import { HEAT_STOPS, formatHour } from "@/lib/score-display";
+import Link from "next/link";
+import { HEAT_STOPS, NOT_ENOUGH_DATA, formatHour } from "@/lib/score-display";
 import type { ScoreStatus } from "./ScoreLayer";
 
 const gradient = `linear-gradient(to right, ${HEAT_STOPS.map(([s, c]) => `${c} ${s}%`).join(", ")})`;
+// Matches the map's hatch pattern (see hatchImage in ScoreLayer).
+const hatch =
+  "repeating-linear-gradient(135deg, rgba(71,85,105,0.55) 0 1.5px, rgba(148,163,184,0.35) 1.5px 5px)";
 
 export default function HourPanel({
   hour,
@@ -54,10 +58,17 @@ export default function HourPanel({
           <span>Quieter</span>
           <span>Busier, better-lit</span>
         </div>
+        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-600">
+          <span className="inline-block h-3 w-5 rounded-sm border border-zinc-300" style={{ background: hatch }} aria-hidden />
+          {NOT_ENOUGH_DATA.label}
+        </div>
         <p className="mt-0.5 text-[11px] text-zinc-500">Fainter hexagons have less map data. Tap one for details.</p>
       </div>
       <p className="mt-2 border-t border-zinc-200 pt-2 text-[11px] text-zinc-600">
-        Indicator only, not a guarantee of safety. In an emergency, call <a href="tel:112" className="font-semibold underline">112</a>.
+        Indicator only, not a guarantee of safety. In an emergency, call <a href="tel:112" className="font-semibold underline">112</a>.{" "}
+        <Link href="/about" className="underline">
+          How this works
+        </Link>
       </p>
     </section>
   );

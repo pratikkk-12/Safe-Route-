@@ -7,7 +7,11 @@ export const COMPONENT_LABELS: Record<ComponentKey, { label: string; hint: strin
   roadType: { label: "Main roads", hint: "Share of busier main roads" },
   anchors: { label: "Help nearby", hint: "Police, hospital with emergency care, 24x7 fuel" },
   transit: { label: "Transit", hint: "Bus stops and stations in service" },
-  reports: { label: "Community reports", hint: "Recent approved reports for this time" },
+};
+
+export const NOT_ENOUGH_DATA = {
+  label: "Not enough data",
+  popup: "Not enough mapped data here. This doesn't mean the area is unsafe.",
 };
 
 export const CONFIDENCE_TEXT = {
