@@ -4,7 +4,9 @@ Mobile-first web app that helps people pick busier, better-lit routes at night i
 The Night Activity Score is an **indicator only, not a guarantee of safety. In an emergency, call 112.**
 
 Stack: Next.js (App Router, TypeScript, Tailwind) · Neon Postgres + PostGIS · Drizzle ORM ·
-MapLibre GL + OpenFreeMap · h3-js · OpenRouteService · Photon · Overpass · Vitest.
+MapLibre GL + OpenFreeMap · h3-js · OSRM (FOSSGIS) or OpenRouteService · Photon · Overpass · Vitest.
+
+Full spec: [SAFEROUTE-BUILD-PROMPT.md](SAFEROUTE-BUILD-PROMPT.md).
 
 ## Setup (Windows PowerShell)
 
@@ -14,6 +16,7 @@ Requires Node.js 20+.
 npm install
 Copy-Item .env.example .env.local
 notepad .env.local    # set DATABASE_URL to your Neon connection string
+                      # ROUTING_PROVIDER=osrm needs no key; ORS_API_KEY is optional
 ```
 
 ### Database
